@@ -1,0 +1,59 @@
+import { PROVIDER_META } from '../../../shared/rooms.ts';
+import type { AgentSnapshot, ProjectSummary } from '../../../shared/types.ts';
+import { Avatar } from '../components/Avatar.tsx';
+import { ago } from '../format.ts';
+
+export function Projects({
+  projects,
+  agents,
+  onSelect,
+}: {
+  projects: ProjectSummary[];
+  agents: AgentSnapshot[];
+  onSelect: (id: string | null, focus?: boolean) => void;
+}) {
+  if (!projects.length) return <div className="empty">No project has an active session right now.</div>;
+  return (
+    <ul className="projects">
+      {projects.map((p) => {
+        const mine = agents.filter((a) => p.agents.includes(a.id));
+        const alert = p.waiting > 0 || p.attention.some((a) => a.level === 'alert');
+        const warn = !alert && p.attention.some((a) => a.level === 'warn');
+        return (
+          <li key={p.path} className={`project${alert ? ' alert' : warn ? ' warn' : ''}`}>
+            <div className="project-head">
+              <h3 title={p.path}>{p.name}</h3>
+              <span className="project-providers">
+                {p.providers.map((prov) => (
+                  <span key={prov} className="swatch" title={PROVIDER_META[prov].label} style={{ background: PROVIDER_META[prov].color }} />
+                ))}
+              </span>
+            </div>
+            <p className="project-meta">
+              {p.working} working · {p.waiting} need you · active {ago(p.lastActivityAt)}
+              {p.git?.branch && ` · ⎇ ${p.git.branch}`}
+              {p.git && ` · ${p.git.dirty} uncommitted`}
+            </p>
+            {p.attention.length > 0 && (
+              <ul className="project-attn">
+                {p.attention.slice(0, 4).map((a, i) => (
+                  <li key={i} className={`attn attn-${a.level}`}>
+                    {a.level === 'alert' ? '⚠ ' : a.level === 'warn' ? '● ' : '· '}
+                    {a.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="project-agents">
+              {mine.map((a) => (
+                <button key={a.id} type="button" className="mini-agent" title={`${a.name} · ${a.activity}`} onClick={() => onSelect(a.id, true)}>
+                  <Avatar agent={a} scale={2} />
+                </button>
+              ))}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
