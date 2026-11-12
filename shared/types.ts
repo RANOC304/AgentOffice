@@ -3,7 +3,7 @@
 import type { RoomId } from './rooms.ts';
 
 /** Which family of tool produced the session. */
-export type Provider = 'claude' | 'codex' | 'chatgpt';
+export type Provider = 'claude-code' | 'codex' | 'claude-chat' | 'chatgpt';
 
 export type AgentKind = 'session' | 'subagent';
 
@@ -72,6 +72,8 @@ export interface Attention {
 
 export interface AgentSnapshot {
   id: string;
+  /** The character's first name, assigned from the editable names list. */
+  persona: string;
   provider: Provider;
   kind: AgentKind;
   parentId?: string;
@@ -92,6 +94,10 @@ export interface AgentSnapshot {
   /** Domain the work belongs to, even while the agent sits in the lounge or browser room. */
   domain: RoomId;
   usingBrowser: boolean;
+  /** Last BrowserOS neo action (ms), used to link Neo sessions to agents. */
+  browserAt?: number;
+  /** Page this agent currently has open in BrowserOS neo. */
+  neo?: NeoPage;
   startedAt: number;
   lastActivityAt: number;
   tokens: TokenUsage;
@@ -105,6 +111,21 @@ export interface AgentSnapshot {
   attention?: Attention;
   /** Activity timestamps (ms) in the analytics window, for timelines. */
   pulses: number[];
+}
+
+/** A page an agent is using in BrowserOS neo, for the Neo hub's giant screen. */
+export interface NeoPage {
+  sessionId: string;
+  agentId?: string;
+  persona?: string;
+  client: string;
+  task?: string;
+  url?: string;
+  title?: string;
+  at: number;
+  /** Server path of the latest screenshot, if Neo saved one. */
+  shot?: string;
+  actions: number;
 }
 
 export interface ProjectSummary {
@@ -125,7 +146,8 @@ export interface ProjectSummary {
 }
 
 export interface SourceStatus {
-  provider: Provider;
+  id: string;
+  label: string;
   ok: boolean;
   path: string;
   message?: string;
@@ -138,6 +160,8 @@ export interface OfficeSnapshot {
   agents: AgentSnapshot[];
   projects: ProjectSummary[];
   sources: SourceStatus[];
+  /** Pages currently open by agents in BrowserOS neo (newest first). */
+  neoPages: NeoPage[];
   /** Analytics window in ms (timeline length). */
   windowMs: number;
 }

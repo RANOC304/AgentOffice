@@ -156,7 +156,7 @@ export class AgentRecord {
     const usingBrowser = this.usingBrowser(now) && status === 'working';
     let room: RoomId = domain;
     if (usingBrowser) room = 'browser';
-    else if (status === 'idle') room = 'lounge';
+    else if (status === 'idle') room = 'cafe';
 
     let activity = extra.activity ?? this.activity;
     if (status === 'waiting') activity = this.waitingReason ?? 'Waiting for you';
@@ -166,6 +166,7 @@ export class AgentRecord {
 
     return {
       id: this.id,
+      persona: '',
       provider: this.provider,
       kind: this.kind,
       parentId: this.parentId,
@@ -181,6 +182,7 @@ export class AgentRecord {
       room,
       domain,
       usingBrowser,
+      browserAt: this.lastBrowserAt || undefined,
       startedAt: this.startedAt,
       lastActivityAt: this.lastActivityAt,
       tokens: { ...this.tokens },

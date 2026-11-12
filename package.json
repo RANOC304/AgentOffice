@@ -9,24 +9,25 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "server": "node --watch server/index.ts",
+    "server": "node --disable-warning=ExperimentalWarning --watch server/index.ts",
     "build": "vite build",
-    "start": "vite build && node server/index.ts",
-    "serve": "node server/index.ts",
+    "start": "vite build && node --disable-warning=ExperimentalWarning server/index.ts",
+    "serve": "node --disable-warning=ExperimentalWarning server/index.ts",
     "check": "tsc -p tsconfig.json",
-    "snapshot": "node server/index.ts --once"
+    "snapshot": "node --disable-warning=ExperimentalWarning server/index.ts --once"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "^5.3.0",
-    "@fontsource/pixelify-sans": "^5.3.0",
-    "@fontsource/vt323": "^5.3.0",
+    "@fontsource/bricolage-grotesque": "^5.3.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.187.0",
     "@vitejs/plugin-react": "^6.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"

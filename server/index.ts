@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.ts';
+import { cleanNames, NAMES_FILE } from './names.ts';
 import { Office } from './office.ts';
 
 const office = new Office();
@@ -28,9 +29,10 @@ if (process.argv.includes('--once')) {
       project: a.projectName,
       tokens: a.tokens.total,
       tools: a.counts.tools,
-      lines: a.lines.length,
+      persona: a.persona,
+      neo: a.neo?.title,
     }));
-    console.log(JSON.stringify({ sources: snap.sources, agents: brief, projects: snap.projects }, null, 2));
+    console.log(JSON.stringify({ sources: snap.sources, agents: brief, neoPages: snap.neoPages, projects: snap.projects.map((p) => p.name) }, null, 2));
     process.exit(0);
   }, 1200);
 } else {
@@ -73,16 +75,40 @@ function start() {
       res.writeHead(403, { 'content-type': 'text/plain' }).end('Forbidden');
       return;
     }
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { allow: 'GET, HEAD' }).end();
-      return;
-    }
     const url = new URL(req.url ?? '/', `http://${host}`);
     const common = {
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
       'cache-control': 'no-store',
     };
+    // The only write: saving the character names list, from our own page only.
+    if (req.method === 'POST' && url.pathname === '/api/names') {
+      saveNames(req, res, common, allowedHosts);
+      return;
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD' }).end();
+      return;
+    }
+
+    if (url.pathname === '/api/names') {
+      res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(
+        JSON.stringify({ names: office.names.names, file: NAMES_FILE, inUse: latest.agents.map((a) => a.persona) }),
+      );
+      return;
+    }
+    const shot = url.pathname.match(/^\/api\/neo\/shot\/([0-9a-f-]{36})\/([\w]+\.(?:jpe?g|png|webp))$/i);
+    if (shot) {
+      const file = office.neo.shotPath(shot[1], shot[2]);
+      if (!file) {
+        res.writeHead(404, common).end();
+        return;
+      }
+      const type = /png$/i.test(file) ? 'image/png' : /webp$/i.test(file) ? 'image/webp' : 'image/jpeg';
+      res.writeHead(200, { ...common, 'content-type': type, 'cache-control': 'private, max-age=3600' });
+      fs.createReadStream(file).pipe(res);
+      return;
+    }
 
     if (url.pathname === '/api/snapshot') {
       res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(latestJson);
@@ -110,6 +136,37 @@ function start() {
   server.listen(config.port, config.host, () => {
     console.log(`AgentOffice API listening on http://${config.host}:${config.port}`);
     if (fs.existsSync(path.join(distDir, 'index.html'))) console.log(`Open http://127.0.0.1:${config.port}`);
+  });
+}
+
+function saveNames(req: http.IncomingMessage, res: http.ServerResponse, common: Record<string, string>, allowedHosts: Set<string>) {
+  // Same-origin only: a browser page from another site cannot set this header without CORS approval.
+  const origin = (req.headers.origin ?? '').replace(/^http:\/\//, '');
+  if (!allowedHosts.has(origin) || req.headers['x-agentoffice'] !== 'names' || !/^application\/json/.test(req.headers['content-type'] ?? '')) {
+    res.writeHead(403, common).end();
+    return;
+  }
+  let body = '';
+  let tooBig = false;
+  req.setEncoding('utf8');
+  req.on('data', (chunk: string) => {
+    body += chunk;
+    if (body.length > 32_000) {
+      tooBig = true;
+      req.destroy();
+    }
+  });
+  req.on('end', () => {
+    if (tooBig) return;
+    try {
+      const parsed = JSON.parse(body) as { names?: unknown };
+      const names = cleanNames(parsed.names);
+      if (!names.length) throw new Error('empty');
+      const saved = office.names.saveList(names);
+      res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ names: saved }));
+    } catch {
+      res.writeHead(400, common).end();
+    }
   });
 }
 

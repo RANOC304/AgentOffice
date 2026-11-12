@@ -13,7 +13,7 @@ export function Analytics({ snapshot }: { snapshot: OfficeSnapshot }) {
   );
   const totals = PROVIDER_ORDER.map((p) => ({ p, n: buckets.reduce((s, b) => s + b.values[p], 0) }));
 
-  const roomRows = ROOMS.filter((r) => r.id !== 'lounge' && r.id !== 'browser')
+  const roomRows = ROOMS.filter((r) => r.kind === 'desks')
     .map((r) => ({ key: r.id, label: r.short, icon: r.icon, value: agents.filter((a) => a.domain === r.id && a.status !== 'done').length }))
     .filter((r) => r.value > 0)
     .sort((a, b) => b.value - a.value);

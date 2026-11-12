@@ -1,11 +1,11 @@
 // Small SVG charts for the dashboard. Thin marks, 2px surface gaps, recessive axes, hover tooltips.
 
 import { useState } from 'react';
-import { PROVIDER_META } from '../../../shared/rooms.ts';
+import { PROVIDER_META, PROVIDER_ORDER as ORDER } from '../../../shared/rooms.ts';
 import type { Provider } from '../../../shared/types.ts';
 import { clock } from '../format.ts';
 
-export const PROVIDER_ORDER: Provider[] = ['claude', 'codex', 'chatgpt'];
+export const PROVIDER_ORDER: Provider[] = [...ORDER];
 
 export interface Bucket {
   start: number;
@@ -19,7 +19,7 @@ export function bucketize(pulsesByProvider: Array<{ provider: Provider; pulses: 
   const buckets: Bucket[] = Array.from({ length: count }, (_, i) => ({
     start: start + i * size,
     end: start + (i + 1) * size,
-    values: { claude: 0, codex: 0, chatgpt: 0 },
+    values: { 'claude-code': 0, codex: 0, 'claude-chat': 0, chatgpt: 0 },
   }));
   for (const { provider, pulses } of pulsesByProvider) {
     for (const t of pulses) {

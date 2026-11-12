@@ -1,6 +1,6 @@
 import type { RoomId } from '../shared/rooms.ts';
 
-export type DomainId = Exclude<RoomId, 'browser' | 'lounge'>;
+export type DomainId = Exclude<RoomId, 'browser' | 'atrium' | 'cafe' | 'meeting' | 'chill'>;
 export type Hints = Partial<Record<DomainId, number>>;
 
 const EXTENSIONS: Array<[RegExp, Hints]> = [
@@ -163,7 +163,7 @@ export class DomainTracker {
         bestScore = value;
       }
     }
-    if (!best || bestScore < 0.25) return this.current ?? 'lobby';
+    if (!best || bestScore < 0.25) return this.current ?? 'general';
     if (this.current && this.current !== best) {
       const currentScore = scores[this.current] ?? 0;
       if (currentScore > bestScore * 0.8) return this.current;

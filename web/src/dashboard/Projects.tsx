@@ -46,8 +46,8 @@ export function Projects({
             )}
             <div className="project-agents">
               {mine.map((a) => (
-                <button key={a.id} type="button" className="mini-agent" title={`${a.name} · ${a.activity}`} onClick={() => onSelect(a.id, true)}>
-                  <Avatar agent={a} scale={2} />
+                <button key={a.id} type="button" className="mini-agent" title={`${a.persona} · ${a.name} · ${a.activity}`} onClick={() => onSelect(a.id, true)}>
+                  <Avatar agent={a} size={34} />
                 </button>
               ))}
             </div>

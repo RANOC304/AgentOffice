@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PROVIDER_META, ROOM_BY_ID } from '../../../shared/rooms.ts';
+import { PROVIDER_META, PROVIDER_ORDER, ROOM_BY_ID } from '../../../shared/rooms.ts';
 import type { AgentSnapshot, AgentStatus, Provider, SourceStatus } from '../../../shared/types.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { ago, STATUS_ICON, STATUS_LABEL } from '../format.ts';
@@ -11,7 +11,7 @@ interface Props {
   sources: SourceStatus[];
 }
 
-const PROVIDERS: Provider[] = ['claude', 'codex', 'chatgpt'];
+const PROVIDERS: Provider[] = [...PROVIDER_ORDER];
 
 export function AgentList({ agents, selectedId, onSelect, sources }: Props) {
   const [providers, setProviders] = useState<Set<Provider>>(new Set(PROVIDERS));
@@ -58,11 +58,11 @@ export function AgentList({ agents, selectedId, onSelect, sources }: Props) {
       {!roots.length && (
         <div className="empty">
           <p className="empty-title">The office is quiet.</p>
-          <p>No current Claude, Codex or ChatGPT sessions match these filters. Start a session and its character walks in within a couple of seconds.</p>
+          <p>No current Claude Code, Codex, Claude chat or ChatGPT sessions match these filters. Start one and its character rides up the elevator within a few seconds.</p>
           <ul className="sources">
             {sources.map((s) => (
-              <li key={s.provider}>
-                <span className={s.ok ? 'ok' : 'bad'}>{s.ok ? '✓' : '✗'}</span> {s.provider === 'claude' ? 'Claude Code' : 'Codex & ChatGPT app'} · {s.message}
+              <li key={s.id}>
+                <span className={s.ok ? 'ok' : 'bad'}>{s.ok ? '✓' : '✗'}</span> {s.label} · {s.message}
               </li>
             ))}
           </ul>
@@ -111,12 +111,15 @@ export function AgentCard({
       onClick={() => onSelect(agent.id, true)}
       style={{ ['--provider' as string]: PROVIDER_META[agent.provider].color }}
     >
-      <Avatar agent={agent} scale={compact ? 2 : 3} />
+      <Avatar agent={agent} size={compact ? 34 : 46} />
       <span className="card-main">
         <span className="card-top">
           <span className="card-name">
-            {agent.kind === 'subagent' && <span className="sub-mark">↳ </span>}
-            {agent.name}
+            <span className="persona">{agent.persona}</span>
+            <span className="session">
+              {agent.kind === 'subagent' && <span className="sub-mark">↳ </span>}
+              {agent.name}
+            </span>
           </span>
           <span className={`pill pill-${agent.status}`}>
             <span aria-hidden="true">{STATUS_ICON[agent.status]}</span> {STATUS_LABEL[agent.status]}

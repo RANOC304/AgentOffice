@@ -86,11 +86,11 @@ export class ClaudeCollector {
   private lastProjectScan = 0;
   private lastSubagentScan = 0;
   private recentTranscripts = new Map<string, number>();
-  status: SourceStatus = { provider: 'claude', ok: false, path: this.projectsDir };
+  status: SourceStatus = { id: 'claude-code', label: 'Claude Code', ok: false, path: this.projectsDir };
 
   poll(now: number): AgentSnapshot[] {
     if (!fs.existsSync(this.projectsDir)) {
-      this.status = { provider: 'claude', ok: false, path: this.projectsDir, message: 'Claude Code data folder not found' };
+      this.status = { id: 'claude-code', label: 'Claude Code', ok: false, path: this.projectsDir, message: 'Claude Code data folder not found' };
       return [];
     }
     const live = this.readLive();
@@ -138,7 +138,7 @@ export class ClaudeCollector {
       else if (now - sub.lastRecordAt > config.doneLingerMinutes * 60_000 * 3) this.subagents.delete(key);
     }
 
-    this.status = { provider: 'claude', ok: true, path: this.projectsDir, message: `${live.length} live session(s)` };
+    this.status = { id: 'claude-code', label: 'Claude Code', ok: true, path: this.projectsDir, message: `${live.length} live session(s)` };
     return out;
   }
 
@@ -206,7 +206,7 @@ export class ClaudeCollector {
   }
 
   private track(sessionId: string, file: string): Tracked {
-    const record = new AgentRecord(`claude:${sessionId}`, 'claude', 'session');
+    const record = new AgentRecord(`claude:${sessionId}`, 'claude-code', 'session');
     record.app = 'Claude Code';
     const tracked: Tracked = {
       record,
@@ -252,7 +252,7 @@ export class ClaudeCollector {
         // Skip old finished helpers without parsing them.
         if (meta?.finished && now - mtime > config.doneLingerMinutes * 60_000) continue;
         if (now - mtime > config.recentMinutes * 60_000) continue;
-        const record = new AgentRecord(key, 'claude', 'subagent');
+        const record = new AgentRecord(key, 'claude-code', 'subagent');
         record.parentId = parent.record.id;
         record.app = parent.record.app;
         record.role = meta?.agentType;

@@ -6,9 +6,10 @@ import { AgentDetail } from './AgentDetail.tsx';
 import { AgentList } from './AgentList.tsx';
 import { Analytics } from './Analytics.tsx';
 import { Feed } from './Feed.tsx';
+import { Names } from './Names.tsx';
 import { Projects } from './Projects.tsx';
 
-type Tab = 'agents' | 'projects' | 'analytics' | 'feed';
+type Tab = 'agents' | 'projects' | 'analytics' | 'feed' | 'names';
 
 interface Props {
   snapshot: OfficeSnapshot | null;
@@ -38,7 +39,8 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect }: Props)
     { id: 'agents', label: 'Agents', count: agents.length },
     { id: 'projects', label: 'Projects', count: snapshot?.projects.length },
     { id: 'analytics', label: 'Analytics' },
-    { id: 'feed', label: 'Live feed' },
+    { id: 'feed', label: 'Feed' },
+    { id: 'names', label: 'Names' },
   ];
 
   return (
@@ -96,6 +98,7 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect }: Props)
         {tab === 'projects' && <Projects projects={snapshot?.projects ?? []} agents={agents} onSelect={onSelect} />}
         {tab === 'analytics' && snapshot && <Analytics snapshot={snapshot} />}
         {tab === 'feed' && <Feed agents={agents} onSelect={onSelect} />}
+        {tab === 'names' && <Names agents={agents} demo={connection === 'demo'} />}
       </div>
     </aside>
   );

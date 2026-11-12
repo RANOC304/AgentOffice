@@ -1,5 +1,5 @@
 // Reads Codex threads from ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
-// Threads started in the ChatGPT desktop app are shown as ChatGPT; CLI/IDE/ACP threads as Codex.
+// Every Codex thread (ChatGPT desktop app, CLI, IDE, ACP) is shown as Codex; the app is in the label.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,9 +30,9 @@ const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\
 export function providerForOriginator(originator: string | undefined): { provider: Provider; app: string } {
   switch (originator) {
     case 'Codex Desktop':
-      return { provider: 'chatgpt', app: 'ChatGPT app' };
+      return { provider: 'codex', app: 'Codex · ChatGPT app' };
     case 'codex_work_desktop':
-      return { provider: 'chatgpt', app: 'ChatGPT app (work)' };
+      return { provider: 'codex', app: 'Codex · ChatGPT app (work)' };
     case 'acpx':
       return { provider: 'codex', app: 'Codex via ACP' };
     case 'codex_exec':
@@ -98,11 +98,11 @@ export class CodexCollector {
   private indexTail = new JsonlTail(this.indexFile, 8 * 1024 * 1024);
   private lastScan = 0;
   private candidates = new Map<string, string>();
-  status: SourceStatus = { provider: 'codex', ok: false, path: this.sessionsDir };
+  status: SourceStatus = { id: 'codex', label: 'Codex', ok: false, path: this.sessionsDir };
 
   poll(now: number): AgentSnapshot[] {
     if (!fs.existsSync(this.sessionsDir)) {
-      this.status = { provider: 'codex', ok: false, path: this.sessionsDir, message: 'Codex sessions folder not found' };
+      this.status = { id: 'codex', label: 'Codex', ok: false, path: this.sessionsDir, message: 'Codex sessions folder not found' };
       return [];
     }
     for (const raw of this.indexTail.read() ?? []) {
@@ -125,7 +125,7 @@ export class CodexCollector {
       if (snap) out.push(snap);
       else if (!this.candidates.has(id)) this.threads.delete(id);
     }
-    this.status = { provider: 'codex', ok: true, path: this.sessionsDir, message: `${out.length} recent thread(s)` };
+    this.status = { id: 'codex', label: 'Codex', ok: true, path: this.sessionsDir, message: `${out.length} recent thread(s)` };
     return out;
   }
 

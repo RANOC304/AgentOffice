@@ -1,17 +1,29 @@
-// Combines every collector into one office snapshot.
+// Combines every collector into one office snapshot: agents, character names, Neo pages, projects.
 
 import os from 'node:os';
-import type { AgentSnapshot, Attention, OfficeSnapshot, ProjectSummary, Provider } from '../shared/types.ts';
+import type { AgentSnapshot, Attention, NeoPage, OfficeSnapshot, ProjectSummary, Provider } from '../shared/types.ts';
 import { ClaudeCollector } from './collectors/claude.ts';
 import { CodexCollector } from './collectors/codex.ts';
+import { describeNeoEvent, NeoCollector, type NeoSession } from './collectors/neo.ts';
 import { config } from './config.ts';
 import { gitInfo } from './git.ts';
+import { Names } from './names.ts';
 
 const SKIP_GIT = (p: string) => /^[A-Z]:\\?$/i.test(p) || p.toLowerCase() === os.homedir().toLowerCase();
+
+/** Which kind of app a BrowserOS neo client belongs to. */
+function familyOf(client: string): Provider | null {
+  if (/claude[-_ ]?code/i.test(client)) return 'claude-code';
+  if (/codex|openai|chatgpt/i.test(client)) return 'codex';
+  if (/claude/i.test(client)) return 'claude-chat';
+  return null;
+}
 
 export class Office {
   private claude = new ClaudeCollector();
   private codex = new CodexCollector();
+  readonly neo = new NeoCollector();
+  readonly names = new Names();
 
   snapshot(now = Date.now()): OfficeSnapshot {
     const agents: AgentSnapshot[] = [];
@@ -19,12 +31,59 @@ export class Office {
       try {
         agents.push(...collector.poll(now));
       } catch (error) {
-        console.error(`[office] collector failed:`, error);
+        console.error('[office] collector failed:', error);
       }
     }
+
+    // BrowserOS neo: attach pages to the agents that opened them, and give chats
+    // (ChatGPT / Claude apps, which keep no local history) their own characters.
+    const pageOwner = new Map<string, string>();
+    for (const s of this.neo.poll(now)) {
+      const family = familyOf(s.client);
+      if (!family) continue;
+      let owner: AgentSnapshot | undefined;
+      if (family === 'claude-code' || family === 'codex') owner = matchAgent(agents, family, s);
+      if (owner) {
+        owner.neo = page(s);
+        pageOwner.set(s.sessionId, owner.id);
+        if (now - s.last < config.browserWindowMs && owner.status === 'working') {
+          owner.usingBrowser = true;
+          owner.room = 'browser';
+          owner.activity = describeNeoEvent(s.events.at(-1) ?? { at: s.last, tool: 'browse', url: s.url, title: s.title });
+        }
+        continue;
+      }
+      if (family === 'claude-code') continue;
+      const chat = this.neo.chatAgent(s, family === 'codex' ? 'chatgpt' : 'claude-chat', now);
+      if (chat) {
+        chat.neo = page(s);
+        pageOwner.set(s.sessionId, chat.id);
+        agents.push(chat);
+      }
+    }
+
     // Subagents whose parent is not in the office keep their own desk but lose the link.
     const ids = new Set(agents.map((a) => a.id));
     for (const agent of agents) if (agent.parentId && !ids.has(agent.parentId)) agent.parentId = undefined;
+
+    // Character names.
+    const personas = this.names.assign(
+      agents.map((a) => a.id),
+      now,
+    );
+    for (const agent of agents) agent.persona = personas.get(agent.id) ?? 'Alex';
+
+    const neoPages: NeoPage[] = [...this.neo.sessions.values()]
+      .filter((s) => s.url && now - s.last < 30 * 60_000 && familyOf(s.client))
+      .sort((a, b) => b.last - a.last)
+      .slice(0, 8)
+      .map((s) => {
+        const p = page(s);
+        p.agentId = pageOwner.get(s.sessionId);
+        p.persona = p.agentId ? personas.get(p.agentId) : undefined;
+        return p;
+      });
+    for (const agent of agents) if (agent.neo) agent.neo.persona = agent.persona;
 
     agents.sort((a, b) => {
       const rank = (s: AgentSnapshot) => ({ waiting: 0, working: 1, idle: 2, done: 3 })[s.status];
@@ -37,7 +96,8 @@ export class Office {
       host: os.hostname(),
       agents,
       projects: this.projects(agents),
-      sources: [this.claude.status, this.codex.status],
+      sources: [this.claude.status, this.codex.status, this.neo.status],
+      neoPages,
       windowMs: config.windowMs,
     };
   }
@@ -62,12 +122,12 @@ export class Office {
         byPath.set(key, project);
       }
       project.agents.push(agent.id);
-      if (!project.providers.includes(agent.provider)) project.providers.push(agent.provider as Provider);
+      if (!project.providers.includes(agent.provider)) project.providers.push(agent.provider);
       if (agent.status === 'working') project.working += 1;
       if (agent.status === 'waiting') project.waiting += 1;
       project.lastActivityAt = Math.max(project.lastActivityAt, agent.lastActivityAt);
       if (agent.attention && agent.attention.level !== 'info')
-        project.attention.push({ level: agent.attention.level, reason: `${agent.name}: ${agent.attention.reason}` });
+        project.attention.push({ level: agent.attention.level, reason: `${agent.persona} (${agent.name}): ${agent.attention.reason}` });
     }
     for (const project of byPath.values()) {
       if (SKIP_GIT(project.path)) continue;
@@ -86,4 +146,33 @@ export class Office {
       p.waiting * 100 + p.attention.filter((a) => a.level === 'alert').length * 50 + p.attention.filter((a) => a.level === 'warn').length * 10 + p.working;
     return [...byPath.values()].sort((a, b) => weight(b) - weight(a) || b.lastActivityAt - a.lastActivityAt);
   }
+}
+
+function page(s: NeoSession): NeoPage {
+  return {
+    sessionId: s.sessionId,
+    client: s.client,
+    task: s.task ?? s.taskTitle,
+    url: s.url,
+    title: s.title,
+    at: s.urlAt ?? s.last,
+    shot: s.shotFile ? `/api/neo/shot/${s.sessionId}/${s.shotFile}` : undefined,
+    actions: s.actions,
+  };
+}
+
+/** The Claude Code / Codex agent whose own BrowserOS neo calls line up with this Neo session. */
+function matchAgent(agents: AgentSnapshot[], family: Provider, s: NeoSession): AgentSnapshot | undefined {
+  let best: AgentSnapshot | undefined;
+  let bestGap = Infinity;
+  for (const a of agents) {
+    if (a.provider !== family || !a.browserAt) continue;
+    if (a.browserAt < s.first - 60_000 || a.browserAt > s.last + 90_000) continue;
+    const gap = Math.abs(a.browserAt - s.last);
+    if (gap < bestGap) {
+      best = a;
+      bestGap = gap;
+    }
+  }
+  return best;
 }

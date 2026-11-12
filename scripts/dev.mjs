@@ -29,5 +29,5 @@ function shutdown(code) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-run('api', ['--watch', 'server/index.ts'], '35');
+run('api', ['--disable-warning=ExperimentalWarning', '--watch', 'server/index.ts'], '35');
 run('web', ['node_modules/vite/bin/vite.js'], '36');

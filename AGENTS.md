@@ -12,7 +12,7 @@ Read and follow the shared instructions at C:/Users/aubin/.codex/AGENTS.md. Appl
 
 ## Repository description
 
-AgentOffice is a private, local-only web app that shows the owner's AI agents and projects as a pixel-art office. Every current Claude Code session, Codex thread, ChatGPT-app (Codex desktop) thread and subagent is its own character; characters walk to the sub-office matching their work, sit at desks, say what they are doing in speech bubbles and gather in the lounge when idle. A side dashboard shows status, activity, analytics and which projects need attention. It runs only on the owner's computer.
+AgentOffice is a private, local-only web app that shows the owner's AI agents and projects as a realistic 3D office on a floating island. Every current Claude Code session, Codex thread, Claude chat and ChatGPT chat (and every subagent) is a named male character: he arrives by the central elevator, walks to the room matching his work, sits and types, speaks in bubbles, and takes coffee, chats or plays ping-pong when idle. The BrowserOS neo hub's wall screen shows the pages agents have open. A side dashboard shows status, activity, analytics and which projects need attention. It runs only on the owner's computer.
 
 ## Custom instructions
 
@@ -34,12 +34,14 @@ AgentOffice is a private, local-only web app that shows the owner's AI agents an
 
 ### Architecture
 
-- `server/collectors/claude.ts` – live sessions from `~/.claude/sessions/<pid>.json`, transcripts and subagents from `~/.claude/projects`.
-- `server/collectors/codex.ts` – rollouts from `~/.codex/sessions`; originator `Codex Desktop` maps to provider `chatgpt`, CLI/IDE/ACP to `codex`.
-- `server/classify.ts` – maps files, commands, MCP servers and skills to rooms; BrowserOS neo use sends agents to the Neo hub.
-- `shared/` – types and room definitions used by both sides.
-- `web/src/office/` – isometric renderer, procedural sprites, path finding and character simulation (canvas, no image assets).
-- `web/src/dashboard/` – React side panel (agents, projects, analytics, live feed).
+- `server/collectors/claude.ts` – live sessions from `~/.claude/sessions/<pid>.json`, transcripts and subagents from `~/.claude/projects` (provider `claude-code`).
+- `server/collectors/codex.ts` – rollouts from `~/.codex/sessions`; every Codex thread (ChatGPT desktop app, CLI, IDE, ACP) is provider `codex`.
+- `server/collectors/neo.ts` – BrowserOS neo's local SQLite log (read-only): pages, screenshots, and `chatgpt` / `claude-chat` characters for cloud chats that drive Neo. `server/office.ts` matches Neo sessions to Claude Code/Codex agents first.
+- `server/names.ts` – character names from `config/names.txt` (user-editable, tracked) with assignments in `data/personas.json` (local, ignored).
+- `server/classify.ts` – maps files, commands, MCP servers and skills to rooms.
+- `shared/` – types, room definitions and the validated provider palette used by both sides.
+- `web/src/office3d/` – three.js office: `layout.ts` (floor plan, seats, spots, nav grid), `environment.ts` (island, garden, walls), `furniture.ts` (merged procedural furniture), `person.ts` + `poses.ts` (jointed male characters), `sim.ts` (behaviours), `elevator.ts`, `screens.ts` (Neo wall screen, desk monitors), `scene.ts` (renderer, lighting, labels).
+- `web/src/dashboard/` – React side panel (agents, projects, analytics, feed, names).
 
 ## Assigned skills
 

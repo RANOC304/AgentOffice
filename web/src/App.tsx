@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { NeoPage } from '../../shared/types.ts';
 import { Dashboard } from './dashboard/Dashboard.tsx';
-import { OfficeView } from './office/OfficeView.tsx';
+import { OfficeView3D } from './office3d/OfficeView3D.tsx';
 import { useOffice } from './useOffice.ts';
+
+const NO_PAGES: NeoPage[] = [];
 
 export function App() {
   const { snapshot, connection } = useOffice();
@@ -35,7 +38,7 @@ export function App() {
   return (
     <div className={`app${panelOpen ? '' : ' panel-closed'}`}>
       <main className="stage">
-        <OfficeView agents={snapshot?.agents ?? []} selectedId={selectedId} onSelect={(id) => select(id)} focusRequest={focus} />
+        <OfficeView3D agents={snapshot ? snapshot.agents : null} neoPages={snapshot?.neoPages ?? NO_PAGES} selectedId={selectedId} onSelect={(id) => select(id)} focusRequest={focus} />
         <button type="button" className="panel-toggle" onClick={() => setPanelOpen((o) => !o)} aria-expanded={panelOpen}>
           {panelOpen ? 'Hide dashboard ›' : '‹ Dashboard'}
         </button>

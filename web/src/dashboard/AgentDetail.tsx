@@ -55,9 +55,10 @@ export function AgentDetail({
         ← All agents
       </button>
       <div className="detail-head">
-        <Avatar agent={agent} scale={4} />
+        <Avatar agent={agent} size={72} />
         <div>
-          <h2>{agent.name}</h2>
+          <h2>{agent.persona}</h2>
+          <p className="detail-session">{agent.kind === 'subagent' ? '↳ ' : ''}{agent.name}</p>
           <p className="detail-sub">
             <span className="swatch" style={{ background: meta.color }} /> {meta.label} · {agent.app}
             {agent.model && ` · ${shortModel(agent.model)}`}

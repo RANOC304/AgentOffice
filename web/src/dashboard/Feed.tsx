@@ -19,7 +19,7 @@ export function Feed({ agents, onSelect }: { agents: AgentSnapshot[]; onSelect: 
           </span>
           <span className="ev-label">
             <button type="button" className="feed-who" onClick={() => onSelect(e.agent.id, true)} style={{ color: PROVIDER_META[e.agent.provider].light }}>
-              {e.agent.name}
+              {e.agent.persona}
             </button>
             {e.label}
           </span>
