@@ -91,7 +91,22 @@ export function demoSnapshot(start: number, now: number): OfficeSnapshot {
     .filter((a) => a.usingBrowser)
     .map((a, k) => {
       const p = PERSONAS.find((x) => `${x.provider}:${x.id}` === a.id)!;
-      return { sessionId: `demo-${k}`, agentId: a.id, persona: a.persona, client: a.provider, url: p.url ?? 'https://example.com/', title: p.lines[0], at: now - k * 20_000, actions: 12 + k * 5 };
+      const url = p.url ?? 'https://example.com/';
+      return {
+        sessionId: `demo-${k}`,
+        agentId: a.id,
+        persona: a.persona,
+        client: a.provider,
+        url,
+        title: p.lines[0],
+        at: now - k * 20_000,
+        actions: 12 + k * 5,
+        tabs: [
+          { id: '1', url, title: p.lines[0], at: now - k * 20_000, closed: false },
+          { id: '2', url: 'https://duckduckgo.com/?q=' + encodeURIComponent(p.name), title: `${p.name} at DuckDuckGo`, at: now - 90_000, closed: false },
+          { id: '3', url: 'https://example.org/notes', title: 'Notes', at: now - 300_000, closed: true },
+        ],
+      };
     });
   const projects = [...new Set(agents.map((a) => a.projectName).filter(Boolean) as string[])].map((name) => {
     const mine = agents.filter((a) => a.projectName === name);
@@ -119,6 +134,8 @@ export function demoSnapshot(start: number, now: number): OfficeSnapshot {
       { id: 'neo', label: 'BrowserOS neo', ok: true, path: 'demo', message: 'Demo data' },
     ],
     neoPages,
+    fired: [],
+    removedProjects: [],
     windowMs: 3 * 3600_000,
   };
 }

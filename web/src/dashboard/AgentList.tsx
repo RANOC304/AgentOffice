@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PROVIDER_META, PROVIDER_ORDER, ROOM_BY_ID } from '../../../shared/rooms.ts';
-import type { AgentSnapshot, AgentStatus, Provider, SourceStatus } from '../../../shared/types.ts';
+import type { AgentSnapshot, AgentStatus, FiredAgent, Provider, SourceStatus } from '../../../shared/types.ts';
+import { act } from '../api.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { ago, STATUS_ICON, STATUS_LABEL } from '../format.ts';
 
@@ -9,11 +10,12 @@ interface Props {
   selectedId: string | null;
   onSelect: (id: string | null, focus?: boolean) => void;
   sources: SourceStatus[];
+  fired: FiredAgent[];
 }
 
 const PROVIDERS: Provider[] = [...PROVIDER_ORDER];
 
-export function AgentList({ agents, selectedId, onSelect, sources }: Props) {
+export function AgentList({ agents, selectedId, onSelect, sources, fired }: Props) {
   const [providers, setProviders] = useState<Set<Provider>>(new Set(PROVIDERS));
   const [status, setStatus] = useState<AgentStatus | 'all'>('all');
 
@@ -88,6 +90,27 @@ export function AgentList({ agents, selectedId, onSelect, sources }: Props) {
           </li>
         ))}
       </ul>
+
+      {fired.length > 0 && (
+        <details className="fired">
+          <summary>Fired workers ({fired.length})</summary>
+          <p className="muted">They left the office. Each comes back automatically when his session gets a new task, or you can re-hire him now.</p>
+          <ul>
+            {fired.map((f) => (
+              <li key={f.id}>
+                <span className="swatch" style={{ background: PROVIDER_META[f.provider]?.color ?? '#888' }} />
+                <span className="fired-name">
+                  <b>{f.persona}</b> {f.name}
+                </span>
+                <span className="muted">{ago(f.firedAt)}</span>
+                <button type="button" className="ghost" onClick={() => void act({ type: 'rehire', id: f.id })}>
+                  Re-hire
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

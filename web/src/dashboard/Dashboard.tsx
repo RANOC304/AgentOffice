@@ -16,9 +16,10 @@ interface Props {
   connection: Connection;
   selectedId: string | null;
   onSelect: (id: string | null, focus?: boolean) => void;
+  onOpenNeo: () => void;
 }
 
-export function Dashboard({ snapshot, connection, selectedId, onSelect }: Props) {
+export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNeo }: Props) {
   const [tab, setTab] = useState<Tab>('agents');
   const agents = snapshot?.agents ?? [];
   const selected = agents.find((a) => a.id === selectedId) ?? null;
@@ -64,12 +65,19 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect }: Props)
       </header>
 
       <section className="kpis" aria-label="Office summary">
-        {kpis.map((k) => (
-          <div key={k.label} className={`kpi kpi-${k.tone}`}>
-            <span className="kpi-value">{k.value}</span>
-            <span className="kpi-label">{k.label}</span>
-          </div>
-        ))}
+        {kpis.map((k) =>
+          k.tone === 'neo' ? (
+            <button key={k.label} type="button" className={`kpi kpi-${k.tone} kpi-button`} onClick={onOpenNeo} title="See every BrowserOS neo tab">
+              <span className="kpi-value">{k.value}</span>
+              <span className="kpi-label">{k.label} · tabs ›</span>
+            </button>
+          ) : (
+            <div key={k.label} className={`kpi kpi-${k.tone}`}>
+              <span className="kpi-value">{k.value}</span>
+              <span className="kpi-label">{k.label}</span>
+            </div>
+          ),
+        )}
       </section>
 
       <nav className="tabs" role="tablist" aria-label="Dashboard sections">
@@ -91,11 +99,11 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect }: Props)
       <div className="dash-body" role="tabpanel">
         {tab === 'agents' &&
           (selected ? (
-            <AgentDetail agent={selected} agents={agents} onSelect={onSelect} />
+            <AgentDetail agent={selected} agents={agents} onSelect={onSelect} demo={connection === 'demo'} />
           ) : (
-            <AgentList agents={agents} selectedId={selectedId} onSelect={onSelect} sources={snapshot?.sources ?? []} />
+            <AgentList agents={agents} selectedId={selectedId} onSelect={onSelect} sources={snapshot?.sources ?? []} fired={snapshot?.fired ?? []} />
           ))}
-        {tab === 'projects' && <Projects projects={snapshot?.projects ?? []} agents={agents} onSelect={onSelect} />}
+        {tab === 'projects' && <Projects projects={snapshot?.projects ?? []} removed={snapshot?.removedProjects ?? []} agents={agents} onSelect={onSelect} demo={connection === 'demo'} />}
         {tab === 'analytics' && snapshot && <Analytics snapshot={snapshot} />}
         {tab === 'feed' && <Feed agents={agents} onSelect={onSelect} />}
         {tab === 'names' && <Names agents={agents} demo={connection === 'demo'} />}

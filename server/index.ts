@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.ts';
 import { cleanNames, NAMES_FILE } from './names.ts';
-import { Office } from './office.ts';
+import { applyAction, Office, type OfficeAction } from './office.ts';
 
 const office = new Office();
 const distDir = fileURLToPath(new URL('../dist', import.meta.url));
@@ -81,9 +81,25 @@ function start() {
       'referrer-policy': 'no-referrer',
       'cache-control': 'no-store',
     };
-    // The only write: saving the character names list, from our own page only.
+    // Writes only change AgentOffice's own state (names list, names, fired workers, hidden projects),
+    // and only from our own page.
     if (req.method === 'POST' && url.pathname === '/api/names') {
-      saveNames(req, res, common, allowedHosts);
+      readJson(req, res, common, allowedHosts, 'names', (body) => {
+        const names = cleanNames((body as { names?: unknown }).names);
+        if (!names.length) return { status: 400, body: { error: 'The list needs at least one valid name.' } };
+        return { status: 200, body: { names: office.names.saveList(names) } };
+      });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/action') {
+      readJson(req, res, common, allowedHosts, 'action', (body) => {
+        const action = parseAction(body);
+        if (!action) return { status: 400, body: { error: 'Invalid action.' } };
+        const error = applyAction(office, action, latest, Date.now());
+        if (error) return { status: 409, body: { error } };
+        setTimeout(tick, 50);
+        return { status: 200, body: { ok: true } };
+      });
       return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -139,10 +155,19 @@ function start() {
   });
 }
 
-function saveNames(req: http.IncomingMessage, res: http.ServerResponse, common: Record<string, string>, allowedHosts: Set<string>) {
-  // Same-origin only: a browser page from another site cannot set this header without CORS approval.
+type JsonResult = { status: number; body: unknown };
+
+/** Reads a small same-origin JSON POST. Another site's page cannot set the custom header without CORS approval. */
+function readJson(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  common: Record<string, string>,
+  allowedHosts: Set<string>,
+  marker: string,
+  handle: (body: unknown) => JsonResult,
+) {
   const origin = (req.headers.origin ?? '').replace(/^http:\/\//, '');
-  if (!allowedHosts.has(origin) || req.headers['x-agentoffice'] !== 'names' || !/^application\/json/.test(req.headers['content-type'] ?? '')) {
+  if (!allowedHosts.has(origin) || req.headers['x-agentoffice'] !== marker || !/^application\/json/.test(req.headers['content-type'] ?? '')) {
     res.writeHead(403, common).end();
     return;
   }
@@ -158,16 +183,37 @@ function saveNames(req: http.IncomingMessage, res: http.ServerResponse, common: 
   });
   req.on('end', () => {
     if (tooBig) return;
+    let result: JsonResult;
     try {
-      const parsed = JSON.parse(body) as { names?: unknown };
-      const names = cleanNames(parsed.names);
-      if (!names.length) throw new Error('empty');
-      const saved = office.names.saveList(names);
-      res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ names: saved }));
+      result = handle(JSON.parse(body));
     } catch {
-      res.writeHead(400, common).end();
+      result = { status: 400, body: { error: 'Invalid request.' } };
     }
+    res.writeHead(result.status, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(result.body));
   });
+}
+
+function parseAction(body: unknown): OfficeAction | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  const str = (v: unknown, max: number) => (typeof v === 'string' && v.length > 0 && v.length <= max ? v : null);
+  const id = str(b.id, 200);
+  switch (b.type) {
+    case 'rename': {
+      const name = str(b.name, 60);
+      return id && name ? { type: 'rename', id, name } : null;
+    }
+    case 'fire':
+    case 'rehire':
+      return id ? { type: b.type, id } : null;
+    case 'removeProject':
+    case 'restoreProject': {
+      const p = str(b.path, 500);
+      return p ? { type: b.type, path: p } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 const MIME: Record<string, string> = {

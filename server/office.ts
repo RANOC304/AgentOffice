@@ -1,13 +1,14 @@
 // Combines every collector into one office snapshot: agents, character names, Neo pages, projects.
 
 import os from 'node:os';
-import type { AgentSnapshot, Attention, NeoPage, OfficeSnapshot, ProjectSummary, Provider } from '../shared/types.ts';
+import type { AgentSnapshot, Attention, FiredAgent, NeoPage, OfficeSnapshot, ProjectSummary, Provider } from '../shared/types.ts';
 import { ClaudeCollector } from './collectors/claude.ts';
 import { CodexCollector } from './collectors/codex.ts';
 import { describeNeoEvent, NeoCollector, type NeoSession } from './collectors/neo.ts';
 import { config } from './config.ts';
 import { gitInfo } from './git.ts';
 import { Names } from './names.ts';
+import { OfficeState } from './state.ts';
 
 const SKIP_GIT = (p: string) => /^[A-Z]:\\?$/i.test(p) || p.toLowerCase() === os.homedir().toLowerCase();
 
@@ -24,6 +25,7 @@ export class Office {
   private codex = new CodexCollector();
   readonly neo = new NeoCollector();
   readonly names = new Names();
+  readonly state = new OfficeState();
 
   snapshot(now = Date.now()): OfficeSnapshot {
     const agents: AgentSnapshot[] = [];
@@ -44,7 +46,7 @@ export class Office {
       let owner: AgentSnapshot | undefined;
       if (family === 'claude-code' || family === 'codex') owner = matchAgent(agents, family, s);
       if (owner) {
-        owner.neo = page(s);
+        owner.neo = page(s, this.neo);
         pageOwner.set(s.sessionId, owner.id);
         if (now - s.last < config.browserWindowMs && owner.status === 'working') {
           owner.usingBrowser = true;
@@ -56,11 +58,27 @@ export class Office {
       if (family === 'claude-code') continue;
       const chat = this.neo.chatAgent(s, family === 'codex' ? 'chatgpt' : 'claude-chat', now);
       if (chat) {
-        chat.neo = page(s);
+        chat.neo = page(s, this.neo);
         pageOwner.set(s.sessionId, chat.id);
         agents.push(chat);
       }
     }
+
+    // Workers fired by the user leave the office until their session is given a new task.
+    for (const agent of agents) {
+      const f = this.state.fired.get(agent.id);
+      if (f && (agent.lastPromptAt ?? 0) > f.at) this.state.rehire(agent.id, now);
+    }
+    const visible = agents.filter((agent) => {
+      if (this.state.fired.has(agent.id)) return false;
+      const parent = agent.parentId ? this.state.fired.get(agent.parentId) : undefined;
+      return !(parent && agent.startedAt <= parent.at + 1000);
+    });
+    agents.length = 0;
+    agents.push(...visible);
+    const fired: FiredAgent[] = [...this.state.fired.entries()]
+      .map(([id, f]) => ({ id, persona: f.persona ?? 'Agent', name: f.name ?? id, provider: (f.provider as Provider) ?? 'claude-code', firedAt: f.at }))
+      .sort((a, b) => b.firedAt - a.firedAt);
 
     // Subagents whose parent is not in the office keep their own desk but lose the link.
     const ids = new Set(agents.map((a) => a.id));
@@ -78,7 +96,7 @@ export class Office {
       .sort((a, b) => b.last - a.last)
       .slice(0, 8)
       .map((s) => {
-        const p = page(s);
+        const p = page(s, this.neo);
         p.agentId = pageOwner.get(s.sessionId);
         p.persona = p.agentId ? personas.get(p.agentId) : undefined;
         return p;
@@ -98,6 +116,8 @@ export class Office {
       projects: this.projects(agents),
       sources: [this.claude.status, this.codex.status, this.neo.status],
       neoPages,
+      fired,
+      removedProjects: [...this.state.removedProjects.values()].map((r) => ({ path: r.path, name: r.path.split(/[\\/]/).pop() ?? r.path, removedAt: r.at })),
       windowMs: config.windowMs,
     };
   }
@@ -129,6 +149,16 @@ export class Office {
       if (agent.attention && agent.attention.level !== 'info')
         project.attention.push({ level: agent.attention.level, reason: `${agent.persona} (${agent.name}): ${agent.attention.reason}` });
     }
+    // Projects removed by the user stay hidden until a worker starts new work there.
+    for (const [key, project] of byPath) {
+      const removedAt = this.state.removedProjects.get(key)?.at;
+      if (removedAt === undefined) continue;
+      const fresh = agents.some(
+        (a) => a.projectPath?.toLowerCase() === key && (a.startedAt > removedAt || (a.lastPromptAt ?? 0) > removedAt),
+      );
+      if (fresh) this.state.restoreProject(project.path, Date.now());
+      else byPath.delete(key);
+    }
     for (const project of byPath.values()) {
       if (SKIP_GIT(project.path)) continue;
       const git = gitInfo(project.path);
@@ -148,7 +178,40 @@ export class Office {
   }
 }
 
-function page(s: NeoSession): NeoPage {
+export type OfficeAction =
+  | { type: 'rename'; id: string; name: string }
+  | { type: 'fire'; id: string }
+  | { type: 'rehire'; id: string }
+  | { type: 'removeProject'; path: string }
+  | { type: 'restoreProject'; path: string };
+
+/** Applies a dashboard action. Only app state changes; real sessions and folders are never touched. */
+export function applyAction(office: Office, action: OfficeAction, latest: OfficeSnapshot, now: number): string | null {
+  const agent = 'id' in action ? latest.agents.find((a) => a.id === action.id) : undefined;
+  switch (action.type) {
+    case 'rename':
+      if (!agent) return 'That worker is no longer in the office.';
+      return office.names.rename(action.id, action.name, now);
+    case 'fire':
+      if (!agent) return 'That worker is no longer in the office.';
+      office.state.fire(agent.id, { persona: agent.persona, name: agent.name, provider: agent.provider }, now);
+      return null;
+    case 'rehire':
+      office.state.rehire(action.id, now);
+      return null;
+    case 'removeProject':
+      if (!latest.projects.some((p) => p.path.toLowerCase() === action.path.toLowerCase())) return 'Unknown project.';
+      office.state.removeProject(action.path, now);
+      return null;
+    case 'restoreProject':
+      office.state.restoreProject(action.path, now);
+      return null;
+    default:
+      return 'Unknown action.';
+  }
+}
+
+function page(s: NeoSession, neo: NeoCollector): NeoPage {
   return {
     sessionId: s.sessionId,
     client: s.client,
@@ -158,6 +221,7 @@ function page(s: NeoSession): NeoPage {
     at: s.urlAt ?? s.last,
     shot: s.shotFile ? `/api/neo/shot/${s.sessionId}/${s.shotFile}` : undefined,
     actions: s.actions,
+    tabs: neo.tabsOf(s),
   };
 }
 

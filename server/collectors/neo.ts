@@ -19,6 +19,15 @@ export interface NeoEvent {
   title?: string;
 }
 
+export interface NeoTabState {
+  id: string;
+  url?: string;
+  title?: string;
+  at: number;
+  shotId?: number;
+  closed: boolean;
+}
+
 export interface NeoSession {
   sessionId: string;
   client: string;
@@ -34,6 +43,7 @@ export interface NeoSession {
   ended: boolean;
   shotFile?: string;
   events: NeoEvent[];
+  tabs: Map<string, NeoTabState>;
 }
 
 const SYSTEM_CLIENTS = /^(neo-startup-check|neo-bridge)$/i;
@@ -150,7 +160,7 @@ export class NeoCollector {
   private readDispatches(now: number) {
     const rows = this.db!
       .prepare(
-        'SELECT id, created_at, session_id, agent_label, tool_name, url, title, args_json FROM tool_dispatches WHERE id > ? ORDER BY id LIMIT 4000',
+        'SELECT id, created_at, session_id, agent_label, tool_name, url, title, args_json, tab_id, page_id, has_screenshot FROM tool_dispatches WHERE id > ? ORDER BY id LIMIT 4000',
       )
       .all(this.lastId) as Array<Record<string, unknown>>;
     for (const r of rows) {
@@ -171,6 +181,7 @@ export class NeoCollector {
           actions: 0,
           ended: false,
           events: [],
+          tabs: new Map(),
         };
         this.sessions.set(sessionId, s);
       }
@@ -181,6 +192,18 @@ export class NeoCollector {
       const tool = String(r.tool_name ?? 'tool');
       const url = typeof r.url === 'string' && r.url ? r.url : undefined;
       const title = typeof r.title === 'string' && r.title ? r.title : undefined;
+      const tabKey = r.tab_id != null ? String(r.tab_id) : r.page_id != null ? `p${r.page_id}` : null;
+      if (tabKey) {
+        let tab = s.tabs.get(tabKey);
+        if (!tab) s.tabs.set(tabKey, (tab = { id: tabKey, at, closed: false }));
+        tab.at = Math.max(tab.at, at);
+        if (url && /^https?:/i.test(url)) {
+          tab.url = url;
+          tab.title = title ?? tab.title;
+        }
+        tab.closed = /close/i.test(tool);
+        if (Number(r.has_screenshot)) tab.shotId = Number(r.id);
+      }
       if (url && /^https?:/i.test(url) && at >= (s.urlAt ?? 0)) {
         s.url = url;
         s.title = title;
@@ -237,6 +260,20 @@ export class NeoCollector {
       }
     }
     return best;
+  }
+
+  /** A session's tabs, newest first, with screenshot paths for the ones Neo captured. */
+  tabsOf(s: NeoSession): Array<{ id: string; url?: string; title?: string; at: number; shot?: string; closed: boolean }> {
+    const dir = this.shotDir(s.sessionId);
+    return [...s.tabs.values()]
+      .filter((t) => t.url)
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 16)
+      .map((t) => {
+        const file = t.shotId !== undefined ? `${t.shotId}.jpg` : undefined;
+        const shot = file && dir && fs.existsSync(path.join(dir, file)) ? `/api/neo/shot/${s.sessionId}/${file}` : undefined;
+        return { id: t.id, url: t.url, title: t.title, at: t.at, shot, closed: t.closed };
+      });
   }
 
   /** Absolute path of a screenshot, only if it lives inside Neo's screenshots folder. */

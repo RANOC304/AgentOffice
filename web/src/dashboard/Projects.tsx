@@ -1,19 +1,60 @@
 import { PROVIDER_META } from '../../../shared/rooms.ts';
 import type { AgentSnapshot, ProjectSummary } from '../../../shared/types.ts';
 import { Avatar } from '../components/Avatar.tsx';
+import { act } from '../api.ts';
 import { ago } from '../format.ts';
 
 export function Projects({
   projects,
+  removed,
   agents,
   onSelect,
+  demo,
 }: {
   projects: ProjectSummary[];
+  removed: Array<{ path: string; name: string; removedAt: number }>;
   agents: AgentSnapshot[];
   onSelect: (id: string | null, focus?: boolean) => void;
+  demo: boolean;
 }) {
-  if (!projects.length) return <div className="empty">No project has an active session right now.</div>;
+  const remove = async (p: ProjectSummary) => {
+    const ok = window.confirm(
+      `Remove ${p.name} from the office?
+
+Only AgentOffice forgets it: nothing on disk changes. It comes back automatically when a worker starts new work there.`,
+    );
+    if (!ok) return;
+    const err = await act({ type: 'removeProject', path: p.path });
+    if (err) window.alert(err);
+  };
+  const removedList = removed.length > 0 && (
+    <details className="fired">
+      <summary>Removed projects ({removed.length})</summary>
+      <p className="muted">Hidden from the office only. Each comes back by itself when a worker starts new work there.</p>
+      <ul>
+        {removed.map((r) => (
+          <li key={r.path}>
+            <span className="fired-name" title={r.path}>
+              <b>{r.name}</b>
+            </span>
+            <span className="muted">{ago(r.removedAt)}</span>
+            <button type="button" className="ghost" onClick={() => void act({ type: 'restoreProject', path: r.path })}>
+              Restore
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+  if (!projects.length)
+    return (
+      <>
+        <div className="empty">No project has an active session right now.</div>
+        {removedList}
+      </>
+    );
   return (
+    <>
     <ul className="projects">
       {projects.map((p) => {
         const mine = agents.filter((a) => p.agents.includes(a.id));
@@ -23,6 +64,9 @@ export function Projects({
           <li key={p.path} className={`project${alert ? ' alert' : warn ? ' warn' : ''}`}>
             <div className="project-head">
               <h3 title={p.path}>{p.name}</h3>
+              <button type="button" className="icon-btn remove" title={demo ? 'Not available in demo mode' : 'Remove from the office (nothing on disk changes)'} onClick={() => void remove(p)} disabled={demo}>
+                🗑
+              </button>
               <span className="project-providers">
                 {p.providers.map((prov) => (
                   <span key={prov} className="swatch" title={PROVIDER_META[prov].label} style={{ background: PROVIDER_META[prov].color }} />
@@ -55,5 +99,7 @@ export function Projects({
         );
       })}
     </ul>
+    {removedList}
+    </>
   );
 }

@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { PROVIDER_META, ROOM_BY_ID } from '../../../shared/rooms.ts';
+import { act } from '../api.ts';
 import type { ActivityKind, AgentSnapshot } from '../../../shared/types.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { ago, childrenOf, clock, compact, duration, shortModel, STATUS_ICON, STATUS_LABEL } from '../format.ts';
@@ -25,11 +27,46 @@ export function AgentDetail({
   agent,
   agents,
   onSelect,
+  demo,
 }: {
   agent: AgentSnapshot;
   agents: AgentSnapshot[];
   onSelect: (id: string | null, focus?: boolean) => void;
+  demo: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(agent.persona);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setEditing(false);
+    setError(null);
+    setDraft(agent.persona);
+  }, [agent.id, agent.persona]);
+
+  const rename = async () => {
+    const name = draft.trim();
+    if (!name || name === agent.persona) return setEditing(false);
+    setBusy(true);
+    const err = await act({ type: 'rename', id: agent.id, name });
+    setBusy(false);
+    setError(err);
+    if (!err) setEditing(false);
+  };
+  const fire = async () => {
+    const kids = agents.filter((a) => a.parentId === agent.id).length;
+    const ok = window.confirm(
+      `Fire ${agent.persona}? He will take the elevator out of the office${kids ? ` with his ${kids} helper${kids > 1 ? 's' : ''}` : ''}.
+
+The real session is not touched; he comes back if you give that session a new task.`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    const err = await act({ type: 'fire', id: agent.id });
+    setBusy(false);
+    setError(err);
+  };
+
   const meta = PROVIDER_META[agent.provider];
   const room = ROOM_BY_ID[agent.room];
   const domain = ROOM_BY_ID[agent.domain];
@@ -57,7 +94,30 @@ export function AgentDetail({
       <div className="detail-head">
         <Avatar agent={agent} size={72} />
         <div>
-          <h2>{agent.persona}</h2>
+          {editing ? (
+            <form
+              className="rename"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void rename();
+              }}
+            >
+              <input value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={30} autoFocus aria-label="New name" />
+              <button type="submit" className="primary" disabled={busy}>
+                Save
+              </button>
+              <button type="button" className="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <h2>
+              {agent.persona}
+              <button type="button" className="icon-btn" title={demo ? 'Not available in demo mode' : 'Rename this character'} onClick={() => setEditing(true)} disabled={demo}>
+                ✎
+              </button>
+            </h2>
+          )}
           <p className="detail-session">{agent.kind === 'subagent' ? '↳ ' : ''}{agent.name}</p>
           <p className="detail-sub">
             <span className="swatch" style={{ background: meta.color }} /> {meta.label} · {agent.app}
@@ -68,6 +128,13 @@ export function AgentDetail({
             {agent.branch && ` · ⎇ ${agent.branch}`}
           </p>
         </div>
+      </div>
+
+      <div className="detail-actions">
+        <button type="button" className="danger" onClick={fire} disabled={demo || busy} title={demo ? 'Not available in demo mode' : 'Send him out through the elevator'}>
+          Fire {agent.persona}
+        </button>
+        {error && <span className="attn attn-warn">{error}</span>}
       </div>
 
       <div className={`now now-${agent.status}`}>

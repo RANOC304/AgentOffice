@@ -34,7 +34,25 @@ Then open http://127.0.0.1:5173. Add `?demo` to either URL for a busy office wit
 - **Needs you**: an agent blocked on a question or an approval stands up and waves under a bouncing `!`. The browser tab title shows how many are waiting.
 - **Day and night** follow your clock: dusk colours in the evening, lamps and lit screens at night.
 
-Controls: drag to rotate, right-drag to pan, scroll to zoom toward the cursor, double-click to reset, click a character or card to select, **Follow** to keep the camera on him, `Esc` to clear.
+## Camera and controls
+
+- **Orbit** (default): drag to rotate, right-drag to pan, scroll to zoom toward the cursor, double-click to reset, **Follow** keeps the camera on the selected worker.
+- **Free cam** (`C`): fly anywhere with `W` `A` `S` `D`, `Q`/`E` down/up, `Shift` to go faster, drag to look around, scroll to move forward. `Esc` leaves it.
+- **Idle tour** (`I`): the camera glides around the office forever, visiting random rooms and each worker in turn. Moving the mouse over the office stops it. With **Auto idle** on, it starts by itself after 3 minutes without any input.
+- **Full screen** (`F`): the office fills the screen; the dashboard comes back when you leave it.
+- Click a character or a card to select him. Click the **BrowserOS neo wall screen** (or the dashboard's *In Neo · tabs* tile) to browse every tab the agents opened, with Neo's screenshots.
+
+The office keeps running smoothly when its window is not in front: a background worker clock keeps the simulation and drawing going when the browser slows animation frames, the resolution adapts to the machine's load, and after a full pause everything catches up instantly.
+
+## Managing the office
+
+These only change what AgentOffice shows. The real sessions and project folders are never touched.
+
+- **Rename** a character from his detail panel (✎ next to his name).
+- **Fire** a worker: he takes the elevator out (with his helpers). He comes back if his session gets a new task, or with **Re-hire** in the *Fired workers* list.
+- **Remove** a project (🗑 in the Projects tab): it disappears from the office and comes back when a worker starts new work there, or with **Restore**.
+
+These choices are stored in `data/` (ignored by Git).
 
 ## Data sources
 
@@ -61,7 +79,7 @@ Regular ChatGPT and Claude chats are stored in the cloud, not on your computer, 
 ## Privacy and safety
 
 - The server binds to `127.0.0.1` only, rejects foreign `Host`/`Origin` headers (DNS-rebinding protection) and sends a strict Content-Security-Policy.
-- Everything is read-only except saving the names list, which only accepts same-origin JSON requests carrying a custom header.
+- Everything is read-only except AgentOffice's own state (names list, character names, fired workers, removed projects), which only accepts same-origin JSON requests carrying a custom header.
 - No outbound network requests. Fonts and the 3D engine are bundled, and there is no telemetry.
 - Only short snippets reach the browser, never full transcripts, and common secrets (API keys, tokens, passwords, private keys) are masked. Neo screenshots are served only from Neo's own screenshot folder.
 - Git status uses `git --no-optional-locks status`, so it never takes repository locks.

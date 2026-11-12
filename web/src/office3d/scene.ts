@@ -6,6 +6,7 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { PROVIDER_META } from '../../../shared/rooms.ts';
 import type { AgentSnapshot, NeoPage } from '../../../shared/types.ts';
+import { FreeFly, Tour } from './cameraModes.ts';
 import { Elevator } from './elevator.ts';
 import { buildEnvironment, type Environment } from './environment.ts';
 import { Batch, buildFurniture } from './furniture.ts';
@@ -16,9 +17,15 @@ import { DeskScreens, NeoScreen } from './screens.ts';
 import { type Char, Sim } from './sim.ts';
 
 export type TagMode = 'auto' | 'all' | 'none';
+export type CameraMode = 'orbit' | 'free' | 'tour';
+
+/** Idle tour starts by itself after this long without any input. */
+const AUTO_IDLE_MS = 3 * 60_000;
 
 interface Callbacks {
   onSelect(id: string | null): void;
+  onModeChange(mode: CameraMode): void;
+  onScreen(sessionId: string | null): void;
 }
 
 interface LabelParts {
@@ -61,7 +68,20 @@ export class OfficeScene {
   private tagMode: TagMode = 'auto';
   private follow = false;
   private camAnim: { fromT: THREE.Vector3; toT: THREE.Vector3; fromP: THREE.Vector3; toP: THREE.Vector3; t: number } | null = null;
-  private clock = new THREE.Clock();
+  private mode: CameraMode = 'orbit';
+  private freeFly: FreeFly;
+  private tour: Tour;
+  private autoIdle = true;
+  private lastInput = performance.now();
+  private ticker: Worker | null = null;
+  private rafId = 0;
+  private lastTick = performance.now();
+  private frameCount = 0;
+  private pixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+  private readonly maxPixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+  private frameTimes: number[] = [];
+  private lastQualityChange = 0;
+  private cleanup: Array<() => void> = [];
   private lastLight = 0;
   private resizeObserver: ResizeObserver;
   private disposed = false;
@@ -70,9 +90,11 @@ export class OfficeScene {
     this.container = container;
     this.callbacks = callbacks;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Shadows are refreshed every other frame (see render), which halves their cost.
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
@@ -104,7 +126,7 @@ export class OfficeScene {
     this.sun.position.set(W / 2 + 26, 46, D / 2 + 30);
     this.sun.target.position.set(W / 2, 0, D / 2);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(3072, 3072);
+    this.sun.shadow.mapSize.set(2048, 2048);
     const sc = this.sun.shadow.camera;
     sc.left = -34;
     sc.right = 34;
@@ -178,26 +200,91 @@ export class OfficeScene {
     this.buildRoomLabels();
     this.applyTimeOfDay(Date.now());
 
+    this.freeFly = new FreeFly(this.camera);
+    this.tour = new Tour(this.camera, this.sim, this.layout, this.elevator);
+
     // Input.
     const el = this.renderer.domElement;
     let down: { x: number; y: number } | null = null;
-    el.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
+    let last: { x: number; y: number } | null = null;
+    el.addEventListener('pointerdown', (e) => {
+      down = { x: e.clientX, y: e.clientY };
+      last = { x: e.clientX, y: e.clientY };
+      if (this.mode === 'free') el.setPointerCapture(e.pointerId);
+    });
     el.addEventListener('pointerup', (e) => {
-      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) this.callbacks.onSelect(this.pick(e));
+      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) this.click(e);
       down = null;
+      last = null;
     });
     el.addEventListener('pointermove', (e) => {
+      if (this.mode === 'free' && e.buttons && last) {
+        this.freeFly.look(e.clientX - last.x, e.clientY - last.y);
+        last = { x: e.clientX, y: e.clientY };
+        return;
+      }
       if (e.buttons) return;
       const id = this.pick(e);
-      this.sim.hoverId = id;
-      el.style.cursor = id ? 'pointer' : 'grab';
+      if (this.mode !== 'tour') this.sim.hoverId = id;
+      el.style.cursor = id || this.overScreen(e) ? 'pointer' : this.mode === 'free' ? 'crosshair' : 'grab';
     });
-    el.addEventListener('dblclick', () => this.setHome(false));
+    el.addEventListener('dblclick', () => {
+      if (this.mode === 'orbit') this.setHome(false);
+    });
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        if (this.mode !== 'free') return;
+        e.preventDefault();
+        this.freeFly.dolly(-e.deltaY * 0.02);
+      },
+      { passive: false },
+    );
+    // Moving the mouse over the office ends the idle tour.
+    let tourStart: { x: number; y: number } | null = null;
+    const onMove = (e: PointerEvent) => {
+      if (this.mode !== 'tour') {
+        tourStart = null;
+        return;
+      }
+      tourStart ??= { x: e.clientX, y: e.clientY };
+      if (Math.hypot(e.clientX - tourStart.x, e.clientY - tourStart.y) > 4) {
+        tourStart = null;
+        this.setMode('orbit');
+      }
+    };
+    container.addEventListener('pointermove', onMove);
+    const onInput = () => (this.lastInput = performance.now());
+    const onKeyDown = (e: KeyboardEvent) => {
+      onInput();
+      if (isTyping(e)) return;
+      if (this.mode !== 'free') return;
+      const key = e.key.toLowerCase();
+      this.freeFly.keys.add(key);
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) e.preventDefault();
+    };
+    const onKeyUp = (e: KeyboardEvent) => this.freeFly.keys.delete(e.key.toLowerCase());
+    const onBlur = () => this.freeFly.keys.clear();
+    window.addEventListener('pointermove', onInput);
+    window.addEventListener('pointerdown', onInput);
+    window.addEventListener('wheel', onInput, { passive: true });
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    this.cleanup.push(() => {
+      container.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointermove', onInput);
+      window.removeEventListener('pointerdown', onInput);
+      window.removeEventListener('wheel', onInput);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    });
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.resize();
-    this.renderer.setAnimationLoop(() => this.frame());
+    this.startLoop();
   }
 
   // ------------------------------------------------------------------ public API
@@ -219,9 +306,44 @@ export class OfficeScene {
     this.follow = on;
   }
 
+  /** Orbit (default), free-flying camera, or the idle tour. */
+  setMode(mode: CameraMode) {
+    if (mode === this.mode) return;
+    const prev = this.mode;
+    this.mode = mode;
+    this.camAnim = null;
+    this.controls.enabled = mode === 'orbit';
+    if (prev === 'tour') this.sim.hoverId = null;
+    if (mode === 'free') this.freeFly.begin();
+    if (mode === 'tour') this.tour.begin(this.controls.target);
+    if (mode === 'orbit') {
+      // Hand the view back to the orbit controls without a jump.
+      const dir = new THREE.Vector3();
+      this.camera.getWorldDirection(dir);
+      let dist = prev === 'tour' ? this.camera.position.distanceTo(this.tour.target) : 18;
+      if (prev === 'free' && dir.y < -0.05) dist = THREE.MathUtils.clamp(-this.camera.position.y / dir.y, 4, 120);
+      this.controls.target.copy(this.camera.position).addScaledVector(dir, dist);
+      this.controls.update();
+    }
+    this.lastInput = performance.now();
+    this.callbacks.onModeChange(mode);
+  }
+
+  setAutoIdle(on: boolean) {
+    this.autoIdle = on;
+    this.lastInput = performance.now();
+  }
+
   focus(id: string) {
     const c = this.sim.chars.get(id);
     if (!c) return;
+    if (this.mode === 'free') {
+      const head = new THREE.Vector3(c.x, c.y + 1.4, c.z);
+      this.camera.position.copy(head).add(new THREE.Vector3(Math.sin(c.heading) * 5, 2.5, Math.cos(c.heading) * 5));
+      this.freeFly.lookAt(head);
+      return;
+    }
+    if (this.mode === 'tour') this.setMode('orbit');
     const target = new THREE.Vector3(c.x, c.y + 1, c.z);
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
     this.animateTo(target, target.clone().add(dir.multiplyScalar(17)));
@@ -252,7 +374,9 @@ export class OfficeScene {
 
   dispose() {
     this.disposed = true;
-    this.renderer.setAnimationLoop(null);
+    cancelAnimationFrame(this.rafId);
+    this.ticker?.terminate();
+    for (const fn of this.cleanup) fn();
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.renderer.dispose();
@@ -284,6 +408,27 @@ export class OfficeScene {
     if (!hit) return null;
     for (const c of this.sim.chars.values()) if (c.person.hit === hit.object) return c.id;
     return null;
+  }
+
+  private click(e: PointerEvent) {
+    const id = this.pick(e);
+    if (id) {
+      this.callbacks.onSelect(id);
+      return;
+    }
+    if (this.overScreen(e)) {
+      const hit = this.raycaster.intersectObject(this.neoScreen.mesh, false)[0];
+      this.callbacks.onScreen(hit?.uv ? this.neoScreen.hit(hit.uv) : null);
+      return;
+    }
+    this.callbacks.onSelect(null);
+  }
+
+  private overScreen(e: PointerEvent): boolean {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    return this.raycaster.intersectObject(this.neoScreen.mesh, false).length > 0;
   }
 
   private addChar(c: Char) {
@@ -380,9 +525,73 @@ export class OfficeScene {
     for (const lamp of this.env.lamps) (lamp.material as THREE.MeshStandardMaterial).emissiveIntensity = night ? 2.2 : dusk ? 0.8 : 0.1;
   }
 
-  private frame() {
-    if (this.disposed) return;
-    const dt = Math.min(0.1, this.clock.getDelta());
+  /**
+   * Frames run on requestAnimationFrame plus a worker clock as a fallback: browsers slow down or
+   * pause animation frames when the window is not in front, and the worker keeps the office moving
+   * (and drawing whenever the window is visible). After a long pause the simulation catches up.
+   */
+  private startLoop() {
+    const raf = () => {
+      if (this.disposed) return;
+      this.rafId = requestAnimationFrame(raf);
+      this.tick(true);
+    };
+    this.rafId = requestAnimationFrame(raf);
+    try {
+      this.ticker = new Worker(new URL('./ticker.ts', import.meta.url), { type: 'module' });
+      this.ticker.onmessage = () => {
+        if (!this.disposed && performance.now() - this.lastTick > 70) this.tick(false);
+      };
+    } catch {
+      this.ticker = null;
+    }
+  }
+
+  private tick(fromRaf: boolean) {
+    const nowP = performance.now();
+    const gap = (nowP - this.lastTick) / 1000;
+    this.lastTick = nowP;
+    if (gap > 0.25) {
+      // Catch up after the page was paused, so nothing looks frozen when you come back.
+      let left = Math.min(gap, 180);
+      while (left > 0) {
+        const step = Math.min(0.1, left);
+        this.simulate(step);
+        left -= step;
+      }
+    } else this.simulate(gap);
+    if (document.hidden) return;
+    if (fromRaf) this.adaptQuality(gap);
+    this.render(Math.min(gap, 0.1));
+  }
+
+  /** Lowers the resolution when frames get slow, raises it again when there is headroom. */
+  private adaptQuality(gap: number) {
+    this.frameTimes.push(gap);
+    if (this.frameTimes.length < 60) return;
+    const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
+    this.frameTimes = [];
+    const now = performance.now();
+    if (now - this.lastQualityChange < 2500) return;
+    let next = this.pixelRatio;
+    if (avg > 1 / 38 && this.pixelRatio > 0.6) next = Math.max(0.6, this.pixelRatio - 0.2);
+    else if (avg < 1 / 56 && this.pixelRatio < this.maxPixelRatio) next = Math.min(this.maxPixelRatio, this.pixelRatio + 0.1);
+    if (next !== this.pixelRatio) {
+      this.pixelRatio = next;
+      this.lastQualityChange = now;
+      this.renderer.setPixelRatio(next);
+      this.resize();
+    }
+  }
+
+  private simulate(dt: number) {
+    const now = Date.now();
+    this.elevator.update(dt, this.sim.hooks);
+    this.sim.update(dt, now);
+    if (this.mode === 'orbit' && this.autoIdle && !document.hidden && performance.now() - this.lastInput > AUTO_IDLE_MS) this.setMode('tour');
+  }
+
+  private render(dt: number) {
     const now = Date.now();
     const t = performance.now() / 1000;
 
@@ -390,15 +599,17 @@ export class OfficeScene {
       this.lastLight = now;
       this.applyTimeOfDay(now);
     }
-    this.elevator.update(dt, this.sim.hooks);
-    this.sim.update(dt, now);
     this.env.update(t);
     this.desks.set(this.sim.activeScreens());
     this.desks.update(t);
     this.neoScreen.update(now);
     this.updateEffects(t);
 
-    if (this.camAnim) {
+    if (this.mode === 'free') this.freeFly.update(dt);
+    else if (this.mode === 'tour') {
+      this.tour.update(dt);
+      this.sim.hoverId = this.tour.focusId;
+    } else if (this.camAnim) {
       const a = this.camAnim;
       a.t = Math.min(1, a.t + dt * 1.4);
       const e = 1 - Math.pow(1 - a.t, 3);
@@ -414,8 +625,9 @@ export class OfficeScene {
         this.camera.position.add(delta);
       }
     }
-    this.controls.update();
+    if (this.mode === 'orbit') this.controls.update();
     this.updateLabels();
+    this.renderer.shadowMap.needsUpdate = this.frameCount++ % 2 === 0;
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
   }
@@ -479,4 +691,9 @@ export class OfficeScene {
       r.el.classList.toggle('compact', camDist > 70);
     }
   }
+}
+
+function isTyping(e: KeyboardEvent): boolean {
+  const el = e.target as HTMLElement | null;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
 }

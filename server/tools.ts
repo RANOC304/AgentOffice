@@ -88,7 +88,8 @@ export function mcpActivity(server: string, tool: string, input: Input = {}): To
 
 export function commandActivity(command: string, description?: string): ToolActivity {
   const label = description ? clean(description, 70) : `Running ${describeCommand(command)}`;
-  const browser = isBrowserOsNeo(command);
+  // Only an actual call through the Neo bridge counts, not a command that merely mentions it.
+  const browser = /browseros-neo-bridge[\\/]bridge\.mjs/i.test(command);
   return {
     kind: browser ? 'browser' : 'command',
     label: browser ? 'Driving BrowserOS neo from the shell' : label,

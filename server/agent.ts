@@ -38,6 +38,7 @@ export class AgentRecord {
   toolCounts = new Map<string, number>();
   files: string[] = [];
   lastPrompt?: string;
+  lastPromptAt = 0;
   lastMessage?: string;
   lastMessageAt = 0;
   lines: SpeechLine[] = [];
@@ -117,6 +118,7 @@ export class AgentRecord {
     const value = clean(text, 220);
     if (!value) return;
     this.lastPrompt = value;
+    this.lastPromptAt = Math.max(this.lastPromptAt, at);
     this.counts.turns += 1;
     this.event(at, 'prompt', `New task: ${clean(text, 70)}`, undefined, hintsForText(text, 1.2));
     this.updatePrior();
@@ -193,6 +195,7 @@ export class AgentRecord {
         .map(([name, count]) => ({ name, count })),
       filesTouched: [...this.files],
       lastPrompt: this.lastPrompt,
+      lastPromptAt: this.lastPromptAt || undefined,
       lastMessage: this.lastMessage,
       lines: [...this.lines],
       recent: [...this.recent].reverse(),

@@ -122,6 +122,18 @@ export class Names {
     return out;
   }
 
+  /** Gives a character a new name chosen by the user. Returns an error message, or null when done. */
+  rename(id: string, raw: string, now: number): string | null {
+    const [name] = cleanNames([raw]);
+    if (!name) return 'Use letters, spaces, hyphens or apostrophes (up to 30 characters).';
+    for (const [other, a] of this.assignments) {
+      if (other !== id && a.name.toLowerCase() === name.toLowerCase() && now - a.lastSeen <= RELEASE_MS) return `${name} is already working here.`;
+    }
+    this.assignments.set(id, { name, lastSeen: now });
+    this.save(now);
+    return null;
+  }
+
   private pick(id: string, taken: Set<string>): string {
     const free = this.list.filter((n) => !taken.has(n.toLowerCase()));
     if (free.length) return free[hash(id) % free.length];

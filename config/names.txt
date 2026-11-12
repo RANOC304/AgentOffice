@@ -4,37 +4,5 @@
 # When every name is taken, AgentOffice invents a new male name.
 # You can also edit this list from the dashboard (Names tab).
 
-Lucas
-Hugo
-Louis
-Gabriel
-Arthur
-Jules
-Adam
-Raphaël
-Léo
-Nathan
-Paul
-Victor
-Noah
-Tom
-Maxime
-Antoine
-Thomas
-Samuel
-Benjamin
-Oscar
-Félix
-Martin
-Simon
-Elliot
-Théo
-Marius
-Basile
-Julien
-Malik
-Kenji
-Diego
-Omar
-Liam
-Mateo
+Pierre-Nicolas
+Eric

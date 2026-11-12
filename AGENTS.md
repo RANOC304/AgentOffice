@@ -37,10 +37,11 @@ AgentOffice is a private, local-only web app that shows the owner's AI agents an
 - `server/collectors/claude.ts` – live sessions from `~/.claude/sessions/<pid>.json`, transcripts and subagents from `~/.claude/projects` (provider `claude-code`).
 - `server/collectors/codex.ts` – rollouts from `~/.codex/sessions`; every Codex thread (ChatGPT desktop app, CLI, IDE, ACP) is provider `codex`.
 - `server/collectors/neo.ts` – BrowserOS neo's local SQLite log (read-only): pages, screenshots, and `chatgpt` / `claude-chat` characters for cloud chats that drive Neo. `server/office.ts` matches Neo sessions to Claude Code/Codex agents first.
+- `server/state.ts` – app-only decisions in `data/office-state.json`: fired workers (back on a new task) and removed projects (back on new work). `POST /api/action` applies rename/fire/rehire/removeProject/restoreProject.
 - `server/names.ts` – character names from `config/names.txt` (user-editable, tracked) with assignments in `data/personas.json` (local, ignored).
 - `server/classify.ts` – maps files, commands, MCP servers and skills to rooms.
 - `shared/` – types, room definitions and the validated provider palette used by both sides.
-- `web/src/office3d/` – three.js office: `layout.ts` (floor plan, seats, spots, nav grid), `environment.ts` (island, garden, walls), `furniture.ts` (merged procedural furniture), `person.ts` + `poses.ts` (jointed male characters), `sim.ts` (behaviours), `elevator.ts`, `screens.ts` (Neo wall screen, desk monitors), `scene.ts` (renderer, lighting, labels).
+- `web/src/office3d/` – three.js office: `layout.ts` (floor plan, seats, spots, nav grid), `environment.ts` (island, garden, walls), `furniture.ts` (merged procedural furniture), `person.ts` + `poses.ts` (jointed male characters), `sim.ts` (behaviours), `elevator.ts`, `screens.ts` (Neo wall screen, desk monitors), `scene.ts` (renderer, lighting, labels, frame loop with worker fallback and catch-up, adaptive resolution), `cameraModes.ts` (free camera, idle tour), `ticker.ts` (background worker clock).
 - `web/src/dashboard/` – React side panel (agents, projects, analytics, feed, names).
 
 ## Assigned skills

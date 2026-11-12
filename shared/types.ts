@@ -100,6 +100,8 @@ export interface AgentSnapshot {
   neo?: NeoPage;
   startedAt: number;
   lastActivityAt: number;
+  /** When the user last gave this agent a new task (ms). */
+  lastPromptAt?: number;
   tokens: TokenUsage;
   counts: AgentCounts;
   topTools: Array<{ name: string; count: number }>;
@@ -111,6 +113,17 @@ export interface AgentSnapshot {
   attention?: Attention;
   /** Activity timestamps (ms) in the analytics window, for timelines. */
   pulses: number[];
+}
+
+/** One BrowserOS neo tab an agent opened. */
+export interface NeoTab {
+  id: string;
+  url?: string;
+  title?: string;
+  at: number;
+  /** Server path of this tab's latest screenshot. */
+  shot?: string;
+  closed: boolean;
 }
 
 /** A page an agent is using in BrowserOS neo, for the Neo hub's giant screen. */
@@ -126,6 +139,17 @@ export interface NeoPage {
   /** Server path of the latest screenshot, if Neo saved one. */
   shot?: string;
   actions: number;
+  /** Every tab this agent session opened, most recent first. */
+  tabs: NeoTab[];
+}
+
+/** A worker removed from the office by the user (the real session is untouched). */
+export interface FiredAgent {
+  id: string;
+  persona: string;
+  name: string;
+  provider: Provider;
+  firedAt: number;
 }
 
 export interface ProjectSummary {
@@ -162,6 +186,10 @@ export interface OfficeSnapshot {
   sources: SourceStatus[];
   /** Pages currently open by agents in BrowserOS neo (newest first). */
   neoPages: NeoPage[];
+  /** Workers fired from the office; they come back if their session gets a new task. */
+  fired: FiredAgent[];
+  /** Projects removed from the office by the user; they come back when a worker starts new work there. */
+  removedProjects: Array<{ path: string; name: string; removedAt: number }>;
   /** Analytics window in ms (timeline length). */
   windowMs: number;
 }

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NeoPage } from '../../shared/types.ts';
+import { NeoViewer } from './components/NeoViewer.tsx';
 import { Dashboard } from './dashboard/Dashboard.tsx';
 import { OfficeView3D } from './office3d/OfficeView3D.tsx';
 import { useOffice } from './useOffice.ts';
@@ -11,6 +12,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ id: string; at: number } | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [neoView, setNeoView] = useState<{ session: string | null } | null>(null);
 
   const select = useCallback((id: string | null, focusCamera = false) => {
     setSelectedId(id);
@@ -30,6 +32,21 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Full screen shows the office alone; the dashboard comes back afterwards.
+  const panelBefore = useRef(true);
+  useEffect(() => {
+    const onChange = () => {
+      if (document.fullscreenElement) {
+        setPanelOpen((open) => {
+          panelBefore.current = open;
+          return false;
+        });
+      } else setPanelOpen(panelBefore.current);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
   const waiting = snapshot?.agents.filter((a) => a.status === 'waiting').length ?? 0;
   useEffect(() => {
     document.title = waiting ? `(${waiting}) AgentOffice · needs you` : 'AgentOffice';
@@ -38,12 +55,31 @@ export function App() {
   return (
     <div className={`app${panelOpen ? '' : ' panel-closed'}`}>
       <main className="stage">
-        <OfficeView3D agents={snapshot ? snapshot.agents : null} neoPages={snapshot?.neoPages ?? NO_PAGES} selectedId={selectedId} onSelect={(id) => select(id)} focusRequest={focus} />
+        <OfficeView3D
+          agents={snapshot ? snapshot.agents : null}
+          neoPages={snapshot?.neoPages ?? NO_PAGES}
+          selectedId={selectedId}
+          onSelect={(id) => select(id)}
+          onScreen={(session) => setNeoView({ session })}
+          focusRequest={focus}
+        />
         <button type="button" className="panel-toggle" onClick={() => setPanelOpen((o) => !o)} aria-expanded={panelOpen}>
           {panelOpen ? 'Hide dashboard ›' : '‹ Dashboard'}
         </button>
       </main>
-      {panelOpen && <Dashboard snapshot={snapshot} connection={connection} selectedId={selectedId} onSelect={select} />}
+      {panelOpen && <Dashboard snapshot={snapshot} connection={connection} selectedId={selectedId} onSelect={select} onOpenNeo={() => setNeoView({ session: null })} />}
+      {neoView && (
+        <NeoViewer
+          pages={snapshot?.neoPages ?? NO_PAGES}
+          agents={snapshot?.agents ?? []}
+          initialSession={neoView.session}
+          onClose={() => setNeoView(null)}
+          onSelectAgent={(id) => {
+            setNeoView(null);
+            select(id, true);
+          }}
+        />
+      )}
     </div>
   );
 }

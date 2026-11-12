@@ -49,6 +49,7 @@ export class NeoScreen {
   private images = new Map<string, HTMLImageElement>();
   private dirty = true;
   private lastDraw = 0;
+  private tiles: Array<{ x: number; y: number; w: number; h: number; sessionId: string }> = [];
 
   constructor(width: number, height: number) {
     this.canvas.width = 2048;
@@ -75,6 +76,13 @@ export class NeoScreen {
     }
     if (this.images.size > 40) for (const k of [...this.images.keys()].slice(0, 20)) this.images.delete(k);
     this.dirty = true;
+  }
+
+  /** Which page tile is under a point of the screen (uv from a raycast). */
+  hit(uv: THREE.Vector2): string | null {
+    const px = uv.x * this.canvas.width;
+    const py = (1 - uv.y) * this.canvas.height;
+    return this.tiles.find((t) => px >= t.x && px <= t.x + t.w && py >= t.y && py <= t.y + t.h)?.sessionId ?? null;
   }
 
   update(now: number) {
@@ -106,11 +114,12 @@ export class NeoScreen {
     const live = this.pages.filter((p) => now - p.at < 120_000).length;
     const status = this.pages.length ? `${live} browsing now · ${this.pages.length} recent` : 'No agent is browsing right now';
     ctx.textAlign = 'right';
-    ctx.fillText(`${status}   ${new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, W - 48, 58);
+    ctx.fillText(`${status} · click to see all tabs   ${new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, W - 48, 58);
     ctx.textAlign = 'left';
 
     const top = 110;
     const pages = this.pages;
+    this.tiles = [];
     if (!pages.length) {
       ctx.font = `400 40px ${FONT}`;
       ctx.fillStyle = '#5f8f88';
@@ -131,6 +140,7 @@ export class NeoScreen {
       const agent = p.agentId ? this.agents.get(p.agentId) : undefined;
       const color = agent ? PROVIDER_META[agent.provider].color : '#1f9e8f';
       const active = now - p.at < 120_000;
+      this.tiles.push({ x, y, w: tw, h: th, sessionId: p.sessionId });
       // Window chrome.
       ctx.save();
       roundRect(ctx, x, y, tw, th, 18);
@@ -183,7 +193,8 @@ export class NeoScreen {
       ctx.font = `400 26px ${FONT}`;
       ctx.fillStyle = active ? '#7ff0c2' : '#9aa6b2';
       ctx.textAlign = 'right';
-      ctx.fillText(`${active ? '● live' : ago(p.at)} · ${p.actions} actions`, x + tw - 22, y + th - 35);
+      const openTabs = p.tabs.filter((t) => !t.closed).length;
+      ctx.fillText(`${active ? '● live' : ago(p.at)} · ${openTabs || p.tabs.length} tab${(openTabs || p.tabs.length) === 1 ? '' : 's'} · ${p.actions} actions`, x + tw - 22, y + th - 35);
       ctx.textAlign = 'left';
       ctx.restore();
     });
