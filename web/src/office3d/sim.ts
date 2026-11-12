@@ -90,6 +90,8 @@ export class Sim {
   private removeFromScene: (c: Char) => void;
   selectedId: string | null = null;
   hoverId: string | null = null;
+  /** Called whenever a character says or thinks something in a bubble. */
+  onChatter?: (c: Char, kind: Bubble['kind'], text: string) => void;
 
   constructor(layout: Layout, nav: Nav, elevator: Elevator, add: (c: Char) => void, remove: (c: Char) => void) {
     this.layout = layout;
@@ -210,7 +212,7 @@ export class Sim {
           then: () => {
             c.mode = 'acting';
             c.act = null;
-            c.bubble = { text: greeting(c.agent), kind: 'say', until: performance.now() + 3800 };
+            this.say(c, greeting(c.agent), 'say');
             this.decide(c, Date.now(), false);
           },
         };
@@ -366,7 +368,7 @@ export class Sim {
     this.releaseAll(c);
     const slotIndex = [...this.chars.values()].filter((o) => o !== c && isLeaving(o)).length;
     const q = this.elevator.queueSpot(slotIndex);
-    c.bubble = { text: c.agent.kind === 'subagent' ? 'Done! Reporting back 👋' : 'Signing off 👋', kind: 'say', until: performance.now() + 3500 };
+    this.say(c, c.agent.kind === 'subagent' ? 'Done! Reporting back 👋' : 'Signing off 👋', 'say');
     this.goTo(c, { kind: 'leave', x: q.x, z: q.z, heading: Math.PI, until: Infinity, prop: null }, false);
     void now;
   }
@@ -593,6 +595,7 @@ export class Sim {
 
   private say(c: Char, text: string, kind: Bubble['kind']) {
     c.bubble = { text, kind, until: performance.now() + Math.min(8000, 3000 + text.length * 50) };
+    this.onChatter?.(c, kind, text);
     c.nextBubbleAt = Date.now() + 6000;
   }
 

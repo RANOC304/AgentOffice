@@ -8,9 +8,9 @@ import { PROVIDER_META } from '../../../shared/rooms.ts';
 import type { AgentSnapshot, NeoPage } from '../../../shared/types.ts';
 import { FreeFly, Tour } from './cameraModes.ts';
 import { Elevator } from './elevator.ts';
-import { buildEnvironment, type Environment } from './environment.ts';
+import { buildEnvironment, type Environment, ISLAND_TOP } from './environment.ts';
 import { Batch, buildFurniture } from './furniture.ts';
-import { buildLayout, D, ELEVATOR, type Layout, W } from './layout.ts';
+import { buildLayout, D, ELEVATOR, itemBox, type Layout, W } from './layout.ts';
 import { softDot } from './materials.ts';
 import { Nav } from './nav.ts';
 import { DeskScreens, NeoScreen } from './screens.ts';
@@ -26,6 +26,17 @@ interface Callbacks {
   onSelect(id: string | null): void;
   onModeChange(mode: CameraMode): void;
   onScreen(sessionId: string | null): void;
+  onChatter(line: Chatter): void;
+}
+
+/** Something a character said or thought in a bubble, for the chat feed. */
+export interface Chatter {
+  agentId: string;
+  persona: string;
+  provider: AgentSnapshot['provider'];
+  kind: 'say' | 'think' | 'action' | 'ask' | 'idle';
+  text: string;
+  at: number;
 }
 
 interface LabelParts {
@@ -82,6 +93,8 @@ export class OfficeScene {
   private frameTimes: number[] = [];
   private lastQualityChange = 0;
   private cleanup: Array<() => void> = [];
+  /** Cheap invisible boxes for everything solid, used to stop the camera just before it touches something. */
+  private colliders: THREE.Mesh[] = [];
   private lastLight = 0;
   private resizeObserver: ResizeObserver;
   private disposed = false;
@@ -102,11 +115,11 @@ export class OfficeScene {
     this.labels.domElement.className = 'ao-labels';
     container.appendChild(this.labels.domElement);
 
-    this.camera = new THREE.PerspectiveCamera(34, 1, 0.5, 900);
+    this.camera = new THREE.PerspectiveCamera(34, 1, 0.08, 900);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 8;
+    this.controls.minDistance = 0.5;
     this.controls.maxDistance = 170;
     this.controls.maxPolarAngle = Math.PI * 0.64;
     this.controls.minPolarAngle = 0.12;
@@ -200,6 +213,9 @@ export class OfficeScene {
     this.buildRoomLabels();
     this.applyTimeOfDay(Date.now());
 
+    this.buildColliders();
+    this.sim.onChatter = (c, kind, text) =>
+      this.callbacks.onChatter({ agentId: c.id, persona: c.agent.persona, provider: c.agent.provider, kind, text, at: Date.now() });
     this.freeFly = new FreeFly(this.camera);
     this.tour = new Tour(this.camera, this.sim, this.layout, this.elevator);
 
@@ -231,6 +247,21 @@ export class OfficeScene {
     el.addEventListener('dblclick', () => {
       if (this.mode === 'orbit') this.setHome(false);
     });
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        if (this.mode !== 'orbit' || e.deltaY >= 0) return;
+        // Zooming in toward something solid is collision-aware: it never passes through the floor,
+        // a wall or a desk, and it can go right up to them. Over the sky the normal zoom applies.
+        const rect = el.getBoundingClientRect();
+        const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        if (!this.approach(ndcX, ndcY, Math.min(0.25, Math.max(0.06, Math.abs(e.deltaY) / 600)))) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      },
+      { capture: true, passive: false },
+    );
     el.addEventListener(
       'wheel',
       (e) => {
@@ -271,6 +302,8 @@ export class OfficeScene {
     this.resizeObserver.observe(container);
     this.resize();
     this.startLoop();
+    // Dev-only debugging handle (window.__office); never present in the production build.
+    if (import.meta.env.DEV) (window as unknown as { __office?: OfficeScene }).__office = this;
   }
 
   // ------------------------------------------------------------------ public API
@@ -354,6 +387,7 @@ export class OfficeScene {
   }
 
   zoom(factor: number) {
+    if (factor < 1 && this.mode === 'orbit' && this.approach(0, 0, 1 - factor)) return;
     // Zooming in also drifts the pivot toward the office floor, so the + button lands on the rooms.
     const dir = this.camera.position.clone().sub(this.controls.target);
     const len = THREE.MathUtils.clamp(dir.length() * factor, this.controls.minDistance, this.controls.maxDistance);
@@ -390,6 +424,7 @@ export class OfficeScene {
   }
 
   private pick(e: PointerEvent): string | null {
+    this.camera.updateMatrixWorld();
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(this.pointer, this.camera);
@@ -398,6 +433,68 @@ export class OfficeScene {
     if (!hit) return null;
     for (const c of this.sim.chars.values()) if (c.person.hit === hit.object) return c.id;
     return null;
+  }
+
+  /**
+   * Zooms toward the first solid thing under a screen point (desk, wall, floor, character): the orbit
+   * pivot moves onto that point and the camera closes a fraction of the gap, never closer than 0.5 m.
+   * Returns false when nothing solid is under the point, so the caller can fall back to a normal zoom.
+   */
+  private approach(ndcX: number, ndcY: number, fraction: number): boolean {
+    this.camera.updateMatrixWorld();
+    this.pointer.set(ndcX, ndcY);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const people = [...this.sim.chars.values()].filter((c) => c.person.root.visible).map((c) => c.person.hit);
+    for (const p of people) p.updateWorldMatrix(true, false);
+    const hit = this.raycaster.intersectObjects([...this.colliders, ...people], false)[0];
+    if (!hit) return false;
+    this.camAnim = null;
+    const point = hit.point;
+    const away = this.camera.position.clone().sub(point);
+    const distance = Math.max(0.5, away.length() * (1 - fraction));
+    this.camera.position.copy(point).add(away.setLength(distance));
+    this.controls.target.copy(point);
+    this.controls.update();
+    return true;
+  }
+
+  private buildColliders() {
+    const material = new THREE.MeshBasicMaterial();
+    const add = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+      m.position.set(x, y, z);
+      m.updateMatrixWorld(true);
+      this.colliders.push(m);
+    };
+    for (const f of this.layout.furniture) {
+      const b = itemBox(f);
+      if (b) add(b.w, b.h, b.d, b.x, b.h / 2, b.z);
+    }
+    for (const w of this.layout.walls) {
+      const len = Math.hypot(w.x2 - w.x1, w.z2 - w.z1);
+      const h = w.kind === 'back' ? 3.45 : w.kind === 'partition' ? 2.4 : 1.1;
+      const t = w.kind === 'back' ? 0.25 : 0.14;
+      const cx = (w.x1 + w.x2) / 2;
+      const cz = (w.z1 + w.z2) / 2;
+      if (w.x1 === w.x2) add(t, h, len, w.kind === 'back' ? -t / 2 : cx, h / 2, cz);
+      else add(len, h, t, cx, h / 2, w.kind === 'back' ? -t / 2 : cz);
+    }
+    // Floor, lawn, the elevator shaft, the Neo wall screen and the rock under the island.
+    add(W + 1, 0.04, D + 1, W / 2, 0, D / 2);
+    const lawn = new THREE.Mesh(new THREE.CylinderGeometry(31, 31, 0.04, 40), material);
+    lawn.scale.set(1, 1, 0.82);
+    lawn.position.set(W / 2, ISLAND_TOP, D / 2);
+    lawn.updateMatrixWorld(true);
+    this.colliders.push(lawn);
+    const rock = new THREE.Mesh(new THREE.ConeGeometry(26, 22, 24), material);
+    rock.rotation.x = Math.PI;
+    rock.scale.set(1, 1, 0.82);
+    rock.position.set(W / 2, ISLAND_TOP - 11.4, D / 2);
+    rock.updateMatrixWorld(true);
+    this.colliders.push(rock);
+    add(ELEVATOR.size, 66, ELEVATOR.size, ELEVATOR.x, 3.7 - 33, ELEVATOR.z);
+    const neo = this.layout.zones.get('browser')!;
+    add(6.3, 2.85, 0.12, (neo.x0 + neo.x1) / 2, 1.95, 0.02);
   }
 
   private click(e: PointerEvent) {

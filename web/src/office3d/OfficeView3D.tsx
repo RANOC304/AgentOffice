@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AgentSnapshot, NeoPage } from '../../../shared/types.ts';
+import { ChatFeed, type ChatFeedHandle } from './ChatFeed.tsx';
 import { type CameraMode, OfficeScene, type TagMode } from './scene.ts';
 
 interface Props {
@@ -23,6 +24,7 @@ function readAutoIdle(): boolean {
 export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen, focusRequest }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<OfficeScene | null>(null);
+  const chatRef = useRef<ChatFeedHandle>(null);
   const agentsRef = useRef(agents);
   const pagesRef = useRef(neoPages);
   const onSelectRef = useRef(onSelect);
@@ -50,6 +52,7 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
           onSelect: (id) => onSelectRef.current(id),
           onModeChange: (m) => setMode(m),
           onScreen: (id) => onScreenRef.current(id),
+          onChatter: (line) => chatRef.current?.chatter(line),
         });
         sceneRef.current = scene;
         scene.setAutoIdle(readAutoIdle());
@@ -122,6 +125,7 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
   return (
     <div className={`office mode-${mode}`} ref={ref}>
       {error && <div className="office-loading">3D view unavailable: {error}</div>}
+      <ChatFeed ref={chatRef} agents={agents} onSelect={(id) => onSelectRef.current(id)} />
       {mode === 'free' && (
         <div className="freecam-hud">
           Free camera · <kbd>Z</kbd>

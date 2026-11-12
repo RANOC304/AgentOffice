@@ -325,6 +325,47 @@ const SIZE: Partial<Record<FurnType, [number, number]>> = {
   fridge: [0.7, 0.7],
 };
 
+/** Approximate height of each item, for the camera's collision boxes. */
+const HEIGHT: Partial<Record<FurnType, number>> = {
+  desk: 0.78,
+  chair: 1.0,
+  divider: 1.13,
+  plant: 0.85,
+  tallPlant: 1.8,
+  shelf: 1.85,
+  rack: 1.95,
+  whiteboard: 1.8,
+  tv: 1.75,
+  arcade: 1.85,
+  easel: 1.7,
+  printer3d: 1.15,
+  pedestal: 1.3,
+  camera: 1.5,
+  softbox: 1.8,
+  safe: 0.95,
+  sofa: 0.85,
+  armchair: 0.85,
+  beanbag: 0.5,
+  coffeeTable: 0.47,
+  counter: 0.95,
+  coffeeMachine: 1.45,
+  standTable: 1.07,
+  meetingTable: 0.78,
+  pingpong: 0.9,
+  cooler: 1.4,
+  bench: 0.46,
+  planter: 1.1,
+  fridge: 1.75,
+};
+
+/** Axis-aligned box (centre and size) roughly enclosing an item, or null for items without a footprint. */
+export function itemBox(f: Furn): { x: number; z: number; w: number; d: number; h: number } | null {
+  const size = SIZE[f.type] ?? (f.type === 'chair' ? [0.55, 0.55] : f.type === 'beanbag' ? [0.8, 0.8] : f.type === 'coffeeMachine' ? [0.42, 0.42] : null);
+  if (!size) return null;
+  const swap = Math.abs(Math.sin(f.rot)) > 0.5;
+  return { x: f.x, z: f.z, w: swap ? size[1] : size[0], d: swap ? size[0] : size[1], h: HEIGHT[f.type] ?? 1 };
+}
+
 function buildNav(furniture: Furn[], walls: WallSeg[]): Uint8Array {
   const blocked = new Uint8Array(NW * ND);
   const fill = (x0: number, z0: number, x1: number, z1: number) => {

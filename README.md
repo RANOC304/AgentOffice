@@ -36,7 +36,10 @@ Then open http://127.0.0.1:5173. Add `?demo` to either URL for a busy office wit
 
 ## Camera and controls
 
-- **Orbit** (default): drag to rotate, right-drag to pan, scroll to zoom toward the cursor, double-click to reset, **Follow** keeps the camera on the selected worker.
+The **Office chat** in the top-left corner merges everyone's actions with what the characters say and think, newest first, ten lines at most. Click a name to open that worker.
+
+
+- **Orbit** (default): drag to rotate, right-drag to pan, scroll to zoom toward the cursor (all the way up to a desk, a wall or a character, stopping just before it), double-click to reset, **Follow** keeps the camera on the selected worker.
 - **Free cam** (`C`): fly anywhere with `Z` `Q` `S` `D` (AZERTY), `A`/`E` down/up, `Shift` to go faster, drag to look around, scroll to move forward. Arrow keys work too. `Esc` leaves it.
 - **Idle tour** (`I`): the camera glides around the office forever, visiting random rooms and each worker in turn. It only stops when you click **Idle tour** again; clicking a worker meanwhile makes the camera visit him. With **Auto idle** on, it starts by itself after 3 minutes without any input.
 - **Full screen** (`F`): the office fills the screen; the dashboard comes back when you leave it.
