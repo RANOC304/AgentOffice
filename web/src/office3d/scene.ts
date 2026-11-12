@@ -13,11 +13,21 @@ import { Batch, buildFurniture } from './furniture.ts';
 import { buildLayout, D, ELEVATOR, itemBox, type Layout, W } from './layout.ts';
 import { softDot } from './materials.ts';
 import { Nav } from './nav.ts';
+import { type BossView, PlayerControl } from './player.ts';
 import { DeskScreens, NeoScreen } from './screens.ts';
-import { type Char, Sim } from './sim.ts';
+import { BOSS_ID, type Char, Sim } from './sim.ts';
 
 export type TagMode = 'auto' | 'all' | 'none';
-export type CameraMode = 'orbit' | 'free' | 'tour';
+export type CameraMode = 'orbit' | 'free' | 'tour' | 'boss';
+
+/** Boss mode status for the toolbar and HUD. */
+export interface BossState {
+  view: BossView;
+  /** Out of the elevator and walking. */
+  arrived: boolean;
+  /** The mouse is captured for looking around. */
+  locked: boolean;
+}
 
 /** Idle tour starts by itself after this long without any input. */
 const AUTO_IDLE_MS = 3 * 60_000;
@@ -27,6 +37,7 @@ interface Callbacks {
   onModeChange(mode: CameraMode): void;
   onScreen(sessionId: string | null): void;
   onChatter(line: Chatter): void;
+  onBoss(state: BossState | null): void;
 }
 
 /** Something a character said or thought in a bubble, for the chat feed. */
@@ -34,7 +45,7 @@ export interface Chatter {
   agentId: string;
   persona: string;
   provider: AgentSnapshot['provider'];
-  kind: 'say' | 'think' | 'action' | 'ask' | 'idle';
+  kind: 'say' | 'think' | 'action' | 'ask' | 'idle' | 'chat';
   text: string;
   at: number;
 }
@@ -69,7 +80,7 @@ export class OfficeScene {
   private hemi: THREE.HemisphereLight;
   private nightLights: THREE.PointLight[] = [];
   private labelsById = new Map<string, LabelParts>();
-  private roomLabels: Array<{ id: string; el: HTMLDivElement; count: HTMLSpanElement }> = [];
+  private roomLabels: Array<{ id: string; el: HTMLDivElement; count: HTMLSpanElement; pin: HTMLSpanElement }> = [];
   private steam: THREE.Sprite[] = [];
   private ball: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
@@ -82,6 +93,7 @@ export class OfficeScene {
   private mode: CameraMode = 'orbit';
   private freeFly: FreeFly;
   private tour: Tour;
+  private player: PlayerControl;
   private autoIdle = true;
   private lastInput = performance.now();
   private ticker: Worker | null = null;
@@ -124,7 +136,8 @@ export class OfficeScene {
     this.controls.maxPolarAngle = Math.PI * 0.64;
     this.controls.minPolarAngle = 0.12;
     this.controls.screenSpacePanning = true;
-    this.controls.zoomToCursor = true;
+    // The wheel is handled by dolly(): it zooms exactly toward the cursor and stops before solid things.
+    this.controls.enableZoom = false;
     this.controls.addEventListener('start', () => (this.camAnim = null));
     this.setHome(true);
 
@@ -189,6 +202,7 @@ export class OfficeScene {
     this.elevator = new Elevator();
     this.scene.add(this.elevator.group);
     const nav = new Nav(this.layout.blocked);
+    this.player = new PlayerControl(this.camera, nav, (o, d) => this.wallHit(o, d));
     this.sim = new Sim(
       this.layout,
       nav,
@@ -215,8 +229,13 @@ export class OfficeScene {
 
     this.buildColliders();
     this.sim.onChatter = (c, kind, text) =>
-      this.callbacks.onChatter({ agentId: c.id, persona: c.agent.persona, provider: c.agent.provider, kind, text, at: Date.now() });
+      this.callbacks.onChatter({ agentId: c.id, persona: c.agent.persona, provider: c.agent.provider, kind, text, at: this.sim.clock() });
     this.freeFly = new FreeFly(this.camera);
+    this.sim.onBossArrived = (c) => {
+      this.player.yaw = c.heading;
+      this.player.pitch = -0.08;
+      this.emitBoss();
+    };
     this.tour = new Tour(this.camera, this.sim, this.layout, this.elevator);
 
     // Input.
@@ -227,13 +246,37 @@ export class OfficeScene {
       down = { x: e.clientX, y: e.clientY };
       last = { x: e.clientX, y: e.clientY };
       if (this.mode === 'free') el.setPointerCapture(e.pointerId);
+      if (this.mode === 'boss' && document.pointerLockElement !== el) {
+        // Capture the mouse so it turns your head like in a game (Esc gives it back).
+        try {
+          void (el.requestPointerLock() as unknown as Promise<void> | undefined)?.catch?.(() => undefined);
+        } catch {
+          el.setPointerCapture(e.pointerId);
+        }
+      }
     });
     el.addEventListener('pointerup', (e) => {
+      if (this.mode === 'boss') {
+        // A click while the mouse is captured talks to the worker in front of you.
+        if (document.pointerLockElement === el && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) this.interact();
+        down = null;
+        last = null;
+        return;
+      }
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) this.click(e);
       down = null;
       last = null;
     });
     el.addEventListener('pointermove', (e) => {
+      if (this.mode === 'boss') {
+        if (document.pointerLockElement === el) this.player.look(e.movementX, e.movementY);
+        else if (e.buttons && last) {
+          this.player.look(e.clientX - last.x, e.clientY - last.y);
+          last = { x: e.clientX, y: e.clientY };
+        }
+        el.style.cursor = document.pointerLockElement === el ? 'none' : 'crosshair';
+        return;
+      }
       if (this.mode === 'free' && e.buttons && last) {
         this.freeFly.look(e.clientX - last.x, e.clientY - last.y);
         last = { x: e.clientX, y: e.clientY };
@@ -250,18 +293,29 @@ export class OfficeScene {
     el.addEventListener(
       'wheel',
       (e) => {
-        if (this.mode !== 'orbit' || e.deltaY >= 0) return;
-        // Zooming in toward something solid is collision-aware: it never passes through the floor,
-        // a wall or a desk, and it can go right up to them. Over the sky the normal zoom applies.
+        if (this.mode !== 'orbit') return;
+        e.preventDefault();
         const rect = el.getBoundingClientRect();
         const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-        if (!this.approach(ndcX, ndcY, Math.min(0.25, Math.max(0.06, Math.abs(e.deltaY) / 600)))) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
+        // One mouse-wheel notch is about 100 px; trackpads send many small deltas.
+        const px = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 300 : e.deltaY;
+        this.dolly(ndcX, ndcY, THREE.MathUtils.clamp(px, -300, 300) / 100, false);
       },
-      { capture: true, passive: false },
+      { passive: false },
     );
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        if (this.mode !== 'boss') return;
+        e.preventDefault();
+        this.player.zoom(e.deltaY);
+      },
+      { passive: false },
+    );
+    const onLock = () => this.emitBoss();
+    document.addEventListener('pointerlockchange', onLock);
+    this.cleanup.push(() => document.removeEventListener('pointerlockchange', onLock));
     el.addEventListener(
       'wheel',
       (e) => {
@@ -276,13 +330,27 @@ export class OfficeScene {
     const onKeyDown = (e: KeyboardEvent) => {
       onInput();
       if (isTyping(e)) return;
-      if (this.mode !== 'free') return;
       const key = e.key.toLowerCase();
+      if (this.mode === 'boss') {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (key === 'v' && !e.repeat) this.setBossView(this.player.view === 'fpv' ? 'tpv' : 'fpv');
+        else if (key === 'e' && !e.repeat) this.interact();
+        else this.player.keys.add(key);
+        if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) e.preventDefault();
+        return;
+      }
+      if (this.mode !== 'free') return;
       this.freeFly.keys.add(key);
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) e.preventDefault();
     };
-    const onKeyUp = (e: KeyboardEvent) => this.freeFly.keys.delete(e.key.toLowerCase());
-    const onBlur = () => this.freeFly.keys.clear();
+    const onKeyUp = (e: KeyboardEvent) => {
+      this.freeFly.keys.delete(e.key.toLowerCase());
+      this.player.keys.delete(e.key.toLowerCase());
+    };
+    const onBlur = () => {
+      this.freeFly.keys.clear();
+      this.player.keys.clear();
+    };
     window.addEventListener('pointermove', onInput);
     window.addEventListener('pointerdown', onInput);
     window.addEventListener('wheel', onInput, { passive: true });
@@ -309,8 +377,37 @@ export class OfficeScene {
   // ------------------------------------------------------------------ public API
 
   setData(agents: AgentSnapshot[], pages: NeoPage[]) {
-    this.sim.sync(agents, Date.now());
+    this.sim.sync(agents, this.sim.clock());
     this.neoScreen.set(pages, agents);
+  }
+
+  /** Runs the office on another time (a replay): offset from the real clock in ms. */
+  setTimeOffset(offset: number) {
+    if (Math.abs(offset - this.sim.offset) < 1000) return;
+    this.sim.offset = offset;
+    this.lastLight = 0;
+  }
+
+  /** Clears the office instantly (entering or leaving a replay, or a big jump in time). */
+  reset() {
+    this.sim.reset();
+  }
+
+  /** A mission hand-off: the giver walks over to the receiver. */
+  handoff(from: string, to: string, project?: string) {
+    this.sim.handoff(from, to, project);
+  }
+
+  /** Projects pinned to rooms, shown on the room signs. */
+  setPins(pins: Array<{ room: string; name: string }>) {
+    for (const r of this.roomLabels) {
+      const names = pins.filter((p) => p.room === r.id).map((p) => p.name);
+      const text = names.length ? `📌 ${names.join(', ')}` : '';
+      if (r.pin.textContent !== text) {
+        r.pin.textContent = text;
+        r.pin.style.display = text ? '' : 'none';
+      }
+    }
   }
 
   setSelected(id: string | null) {
@@ -333,6 +430,16 @@ export class OfficeScene {
     this.camAnim = null;
     this.controls.enabled = mode === 'orbit';
     if (prev === 'tour') this.sim.hoverId = null;
+    if (prev === 'boss') {
+      // You walk back to the elevator and ride down; the camera is yours again.
+      this.sim.boss?.person.setHeadVisible(true);
+      this.sim.leaveBoss();
+      if (document.pointerLockElement) document.exitPointerLock();
+      this.player.keys.clear();
+      this.renderer.domElement.style.cursor = '';
+      this.callbacks.onBoss(null);
+    }
+    if (mode === 'boss') this.player.begin();
     if (mode === 'free') this.freeFly.begin();
     if (mode === 'tour') this.tour.begin(this.controls.target);
     if (mode === 'orbit') {
@@ -341,11 +448,52 @@ export class OfficeScene {
       this.camera.getWorldDirection(dir);
       let dist = prev === 'tour' ? this.camera.position.distanceTo(this.tour.target) : 18;
       if (prev === 'free' && dir.y < -0.05) dist = THREE.MathUtils.clamp(-this.camera.position.y / dir.y, 4, 120);
+      if (prev === 'boss') dist = 6;
       this.controls.target.copy(this.camera.position).addScaledVector(dir, dist);
       this.controls.update();
     }
     this.lastInput = performance.now();
     this.callbacks.onModeChange(mode);
+  }
+
+  /** Boss mode: you arrive by the elevator and walk around (first or third person). */
+  spawnBoss(view: BossView) {
+    this.player.setView(view);
+    this.sim.spawnBoss();
+    this.setMode('boss');
+    this.emitBoss();
+  }
+
+  setBossView(view: BossView) {
+    this.player.setView(view);
+    this.emitBoss();
+  }
+
+  private emitBoss() {
+    if (this.mode !== 'boss') return;
+    this.callbacks.onBoss({
+      view: this.player.view,
+      arrived: this.sim.boss?.mode === 'player',
+      locked: document.pointerLockElement === this.renderer.domElement,
+    });
+  }
+
+  /** Talks to the worker you are looking at (or the nearest one) and opens his details. */
+  private interact() {
+    const boss = this.sim.boss;
+    if (!boss || boss.mode !== 'player') return;
+    this.camera.updateMatrixWorld();
+    this.pointer.set(0, 0);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const people = [...this.sim.chars.values()].filter((c) => c.id !== BOSS_ID && c.person.root.visible);
+    for (const c of people) c.person.hit.updateWorldMatrix(true, false);
+    const hit = this.raycaster.intersectObjects(
+      people.map((c) => c.person.hit),
+      false,
+    )[0];
+    const aimed = hit ? people.find((c) => c.person.hit === hit.object && Math.hypot(c.x - boss.x, c.z - boss.z) < 6) : undefined;
+    const id = this.sim.greetBoss(aimed?.id);
+    if (id) this.callbacks.onSelect(id);
   }
 
   setAutoIdle(on: boolean) {
@@ -355,7 +503,7 @@ export class OfficeScene {
 
   focus(id: string) {
     const c = this.sim.chars.get(id);
-    if (!c) return;
+    if (!c || this.mode === 'boss') return;
     if (this.mode === 'free') {
       const head = new THREE.Vector3(c.x, c.y + 1.4, c.z);
       this.camera.position.copy(head).add(new THREE.Vector3(Math.sin(c.heading) * 5, 2.5, Math.cos(c.heading) * 5));
@@ -386,14 +534,18 @@ export class OfficeScene {
     } else this.animateTo(target.clone(), pos);
   }
 
-  zoom(factor: number) {
-    if (factor < 1 && this.mode === 'orbit' && this.approach(0, 0, 1 - factor)) return;
-    // Zooming in also drifts the pivot toward the office floor, so the + button lands on the rooms.
-    const dir = this.camera.position.clone().sub(this.controls.target);
-    const len = THREE.MathUtils.clamp(dir.length() * factor, this.controls.minDistance, this.controls.maxDistance);
-    const target = this.controls.target.clone();
-    if (factor < 1) target.lerp(new THREE.Vector3(W / 2, 0, D / 2), 0.35);
-    this.animateTo(target, target.clone().add(dir.setLength(len)));
+  /** The + and − buttons: zoom toward or away from the centre of the view. */
+  zoom(direction: 'in' | 'out') {
+    if (this.mode === 'orbit') this.dolly(0, 0, direction === 'in' ? -1.6 : 1.6, true);
+  }
+
+  /**
+   * Mouse drag direction. Inverted (the default) moves the camera the way you drag; natural drags
+   * the office itself, like a map.
+   */
+  setInvertDrag(on: boolean) {
+    this.controls.rotateSpeed = on ? -0.9 : 0.9;
+    this.controls.panSpeed = on ? -1 : 1;
   }
 
   dispose() {
@@ -428,34 +580,76 @@ export class OfficeScene {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = [...this.sim.chars.values()].filter((c) => c.person.root.visible).map((c) => c.person.hit);
+    const hits = [...this.sim.chars.values()].filter((c) => c.person.root.visible && c.id !== BOSS_ID).map((c) => c.person.hit);
     const hit = this.raycaster.intersectObjects(hits, false)[0];
     if (!hit) return null;
     for (const c of this.sim.chars.values()) if (c.person.hit === hit.object) return c.id;
     return null;
   }
 
+  /** First wall, floor or piece of furniture along a ray (people ignored). */
+  private wallHit(origin: THREE.Vector3, dir: THREE.Vector3): THREE.Intersection | undefined {
+    this.raycaster.set(origin, dir);
+    return this.raycaster.intersectObjects(this.colliders, false)[0];
+  }
+
+  /** First solid thing (furniture, wall, floor, island, character) along a ray. */
+  private solidHit(origin: THREE.Vector3, dir: THREE.Vector3): THREE.Intersection | undefined {
+    this.raycaster.set(origin, dir);
+    const people = [...this.sim.chars.values()].filter((c) => c.person.root.visible).map((c) => c.person.hit);
+    for (const p of people) p.updateWorldMatrix(true, false);
+    return this.raycaster.intersectObjects([...this.colliders, ...people], false)[0];
+  }
+
   /**
-   * Zooms toward the first solid thing under a screen point (desk, wall, floor, character): the orbit
-   * pivot moves onto that point and the camera closes a fraction of the gap, never closer than 0.5 m.
-   * Returns false when nothing solid is under the point, so the caller can fall back to a normal zoom.
+   * Zooms toward (negative notches) or away from (positive) the point under a screen position. The
+   * camera slides along the ray through that point without turning, so the point stays exactly under
+   * the cursor. Zooming in stops 0.5 m before anything solid; zooming out never backs into a wall.
+   * The orbit pivot is then put back on whatever the camera faces, so rotating feels natural.
    */
-  private approach(ndcX: number, ndcY: number, fraction: number): boolean {
+  private dolly(ndcX: number, ndcY: number, notches: number, animate: boolean) {
+    if (!notches) return;
     this.camera.updateMatrixWorld();
     this.pointer.set(ndcX, ndcY);
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const people = [...this.sim.chars.values()].filter((c) => c.person.root.visible).map((c) => c.person.hit);
-    for (const p of people) p.updateWorldMatrix(true, false);
-    const hit = this.raycaster.intersectObjects([...this.colliders, ...people], false)[0];
-    if (!hit) return false;
+    const dir = this.raycaster.ray.direction.clone();
+    const origin = this.camera.position.clone();
+    const ahead = this.solidHit(origin, dir);
+    const reach = ahead ? ahead.distance : Math.max(4, origin.distanceTo(this.controls.target));
+    const k = 1 - Math.pow(0.8, Math.abs(notches));
+    let step: number;
+    if (notches < 0) {
+      step = reach * k;
+      if (ahead) step = Math.min(step, ahead.distance - 0.5);
+      if (step <= 0.01) return;
+    } else {
+      step = -reach * (1 / (1 - k) - 1);
+      const behind = this.solidHit(origin, dir.clone().negate());
+      if (behind) step = Math.max(step, -(behind.distance - 0.5));
+      const centre = new THREE.Vector3(W / 2, 0, D / 2);
+      const next = origin.clone().addScaledVector(dir, step);
+      if (next.distanceTo(centre) > this.controls.maxDistance) {
+        // Stop at the outer limit instead of refusing to move.
+        const far = origin.distanceTo(centre);
+        if (far >= this.controls.maxDistance) return;
+        step *= (this.controls.maxDistance - far) / Math.max(0.01, next.distanceTo(centre) - far);
+      }
+      if (step >= -0.01) return;
+    }
+    const pos = origin.addScaledVector(dir, step);
+    const forward = new THREE.Vector3();
+    this.camera.getWorldDirection(forward);
+    const facing = this.solidHit(pos, forward);
+    const pivot = THREE.MathUtils.clamp(facing ? facing.distance : this.camera.position.distanceTo(this.controls.target), 0.5, 150);
+    const target = pos.clone().addScaledVector(forward, pivot);
+    if (animate) {
+      this.animateTo(target, pos);
+      return;
+    }
     this.camAnim = null;
-    const point = hit.point;
-    const away = this.camera.position.clone().sub(point);
-    const distance = Math.max(0.5, away.length() * (1 - fraction));
-    this.camera.position.copy(point).add(away.setLength(distance));
-    this.controls.target.copy(point);
+    this.camera.position.copy(pos);
+    this.controls.target.copy(target);
     this.controls.update();
-    return true;
   }
 
   private buildColliders() {
@@ -537,7 +731,15 @@ export class OfficeScene {
     const sub = document.createElement('span');
     sub.className = 'ao-sub';
     tag.append(dot, name, sub);
-    tag.addEventListener('click', () => this.callbacks.onSelect(c.id));
+    if (c.agent.host) {
+      // Works on another computer.
+      const host = document.createElement('span');
+      host.className = 'ao-host';
+      host.textContent = `🖥 ${c.agent.host}`;
+      tag.append(host);
+    }
+    if (c.id === BOSS_ID) root.classList.add('boss');
+    else tag.addEventListener('click', () => this.callbacks.onSelect(c.id));
     root.append(bubble, alert, tag);
     const obj = new CSS2DObject(root);
     obj.center.set(0.5, 1);
@@ -568,13 +770,16 @@ export class OfficeScene {
       label.textContent = def.label;
       const count = document.createElement('span');
       count.className = 'ao-room-count';
-      el.append(icon, label, count);
+      const pin = document.createElement('span');
+      pin.className = 'ao-room-pin';
+      pin.style.display = 'none';
+      el.append(icon, label, count, pin);
       const obj = new CSS2DObject(el);
       obj.position.set(zone.x0 + 1.6, 2.9, zone.z0 + 0.6);
       if (def.id === 'atrium') obj.position.set(ELEVATOR.x - 2.4, 3.2, zone.z0 + 1.0);
       if (def.id === 'browser') obj.position.set(zone.x0 + 1.4, 3.7, zone.z0 + 0.7);
       this.scene.add(obj);
-      this.roomLabels.push({ id: def.id, el, count });
+      this.roomLabels.push({ id: def.id, el, count, pin });
     }
   }
 
@@ -672,14 +877,14 @@ export class OfficeScene {
   }
 
   private simulate(dt: number) {
-    const now = Date.now();
+    const now = this.sim.clock();
     this.elevator.update(dt, this.sim.hooks);
     this.sim.update(dt, now);
     if (this.mode === 'orbit' && this.autoIdle && !document.hidden && performance.now() - this.lastInput > AUTO_IDLE_MS) this.setMode('tour');
   }
 
   private render(dt: number) {
-    const now = Date.now();
+    const now = this.sim.clock();
     const t = performance.now() / 1000;
 
     if (now - this.lastLight > 60_000) {
@@ -692,7 +897,16 @@ export class OfficeScene {
     this.neoScreen.update(now);
     this.updateEffects(t);
 
-    if (this.mode === 'free') this.freeFly.update(dt);
+    if (this.mode === 'boss') {
+      const c = this.sim.boss;
+      if (!c) this.setMode('orbit');
+      else {
+        const wasArrived = c.mode === 'player';
+        this.player.update(dt, c, c.mode === 'player', c.mode === 'hidden' ? this.elevator.y + 0.02 : c.y);
+        c.person.setHeadVisible(this.player.view !== 'fpv' || c.mode !== 'player');
+        if (!wasArrived && c.mode === 'player') this.emitBoss();
+      }
+    } else if (this.mode === 'free') this.freeFly.update(dt);
     else if (this.mode === 'tour') {
       this.tour.update(dt);
       this.sim.hoverId = this.tour.focusId;
@@ -746,7 +960,7 @@ export class OfficeScene {
       if (!l) continue;
       const p = this.sim.labelPos(c);
       l.obj.position.set(p.x, p.y, p.z);
-      const visible = c.person.root.visible && c.mode !== 'hidden';
+      const visible = c.person.root.visible && c.mode !== 'hidden' && !(c.id === BOSS_ID && this.mode === 'boss' && this.player.view === 'fpv');
       l.obj.visible = visible;
       if (!visible) continue;
       if (c.mode === 'acting' || c.mode === 'walking') counts.set(c.act?.seat?.room ?? c.agent.room, (counts.get(c.act?.seat?.room ?? c.agent.room) ?? 0) + 1);
@@ -756,7 +970,7 @@ export class OfficeScene {
       l.tag.style.display = showTag ? '' : 'none';
       l.root.classList.toggle('selected', selected);
       l.root.classList.toggle('waiting', c.agent.status === 'waiting');
-      l.name.textContent = c.agent.persona || 'Agent';
+      l.name.textContent = c.id === BOSS_ID ? '👔 You (boss)' : c.agent.persona || 'Agent';
       const sub = selected || hovered ? `${c.agent.kind === 'subagent' ? '↳ ' : ''}${c.agent.name}` : '';
       if (sub !== l.lastSub) {
         l.sub.textContent = sub;

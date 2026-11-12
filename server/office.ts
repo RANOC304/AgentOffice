@@ -1,14 +1,32 @@
 // Combines every collector into one office snapshot: agents, character names, Neo pages, projects.
 
 import os from 'node:os';
-import type { AgentSnapshot, Attention, FiredAgent, NeoPage, OfficeSnapshot, ProjectSummary, Provider } from '../shared/types.ts';
+import { ROOM_BY_ID, type RoomId } from '../shared/rooms.ts';
+import type {
+  AgentControls,
+  AgentSnapshot,
+  Attention,
+  FiredAgent,
+  MissionPermission,
+  MissionProvider,
+  NeoPage,
+  OfficeSnapshot,
+  OpenTarget,
+  ProjectSummary,
+  Provider,
+  UsageInfo,
+} from '../shared/types.ts';
 import { ClaudeCollector } from './collectors/claude.ts';
 import { CodexCollector } from './collectors/codex.ts';
 import { describeNeoEvent, NeoCollector, type NeoSession } from './collectors/neo.ts';
 import { config } from './config.ts';
 import { gitInfo } from './git.ts';
+import { isUuid, killTree, openClaudeDesktop, openCodexThread, openFolder, resumeInTerminal, toolsIfKnown } from './launchers.ts';
+import { Missions } from './missions.ts';
 import { Names } from './names.ts';
+import { Peers } from './peers.ts';
 import { OfficeState } from './state.ts';
+import { usageGauges } from './usage.ts';
 
 const SKIP_GIT = (p: string) => /^[A-Z]:\\?$/i.test(p) || p.toLowerCase() === os.homedir().toLowerCase();
 
@@ -21,14 +39,30 @@ function familyOf(client: string): Provider | null {
 }
 
 export class Office {
-  private claude = new ClaudeCollector();
+  readonly claude = new ClaudeCollector();
   private codex = new CodexCollector();
   readonly neo = new NeoCollector();
   readonly names = new Names();
   readonly state = new OfficeState();
+  /** Mission board and headless runs (main office only). */
+  readonly missions: Missions | null;
+  /** Agents shared by other computers (main office only). */
+  readonly peers: Peers | null;
+
+  constructor(options: { peers?: boolean; missions?: boolean; persist?: boolean } = {}) {
+    if (options.persist === false) this.names.persist = false;
+    this.missions = options.missions === false ? null : new Missions();
+    this.peers = options.peers === false ? null : new Peers();
+    const missions = this.missions;
+    if (missions) this.claude.retain = (sessionId) => missions.retained(`claude:${sessionId}`, Date.now());
+  }
 
   snapshot(now = Date.now()): OfficeSnapshot {
     const agents: AgentSnapshot[] = [];
+    if (this.missions) {
+      this.missions.poll(now);
+      for (const m of this.missions.list) if (m.status === 'running' && m.provider === 'claude-code' && m.sessionId) this.claude.watch(m.sessionId);
+    }
     for (const collector of [this.claude, this.codex]) {
       try {
         agents.push(...collector.poll(now));
@@ -63,6 +97,23 @@ export class Office {
         agents.push(chat);
       }
     }
+
+    // Missions: their workers keep working while the process runs, and carry the mission title.
+    if (this.missions) {
+      for (const agent of agents) {
+        const m = this.missions.forAgent(agent.id);
+        if (!m) continue;
+        if (!m.resume) agent.name = m.title;
+        if (m.status === 'running' && (agent.status === 'idle' || agent.status === 'done')) {
+          agent.status = 'working';
+          if (!agent.activity || /Session ended|Ready|Finished/i.test(agent.activity)) agent.activity = 'Working on the mission';
+        }
+      }
+    }
+
+    // Other computers.
+    const remote = this.peers?.poll(now);
+    if (remote) agents.push(...remote.agents);
 
     // Workers fired by the user leave the office until their session is given a new task.
     for (const agent of agents) {
@@ -101,6 +152,19 @@ export class Office {
         p.persona = p.agentId ? personas.get(p.agentId) : undefined;
         return p;
       });
+    for (const p of remote?.neoPages ?? []) {
+      if (neoPages.length >= 10) break;
+      if (now - p.at > 30 * 60_000) continue;
+      p.persona = p.agentId ? personas.get(p.agentId) : undefined;
+      neoPages.push(p);
+    }
+
+    // Projects pinned to a room: their workers sit there.
+    for (const agent of agents) {
+      const pin = agent.projectPath ? this.state.pins.get(agent.projectPath.toLowerCase()) : undefined;
+      if (pin && (agent.status === 'working' || agent.status === 'waiting') && !agent.usingBrowser) agent.room = pin.room;
+    }
+    for (const agent of agents) if (!agent.host) agent.controls = this.controls(agent);
     for (const agent of agents) if (agent.neo) agent.neo.persona = agent.persona;
 
     agents.sort((a, b) => {
@@ -119,7 +183,51 @@ export class Office {
       fired,
       removedProjects: [...this.state.removedProjects.values()].map((r) => ({ path: r.path, name: r.path.split(/[\\/]/).pop() ?? r.path, removedAt: r.at })),
       windowMs: config.windowMs,
+      missions: this.missions?.list ?? [],
+      usage: this.usage(agents, now),
+      peers: { dir: this.peers?.dir, list: this.peers?.list ?? [] },
+      pins: [...this.state.pins.values()],
+      launchers: { 'claude-code': Boolean(toolsIfKnown()?.['claude-code']), codex: Boolean(toolsIfKnown()?.codex) },
     };
+  }
+
+  /** What the office can do with a session from this computer. */
+  private controls(a: AgentSnapshot): AgentControls {
+    const mission = this.missions?.forAgent(a.id);
+    const running = mission?.status === 'running';
+    const open: OpenTarget[] = [];
+    let reply: AgentControls['reply'] = null;
+    let canStop = running;
+    if (a.kind === 'session' && a.provider === 'claude-code') {
+      const live = this.claude.liveInfo(a.id);
+      if (live) {
+        // Open somewhere else right now: reply there.
+        reply = 'app';
+        if (live.entrypoint === 'claude-desktop') open.push('claude-app');
+        else if (live.entrypoint === 'cli') canStop = true;
+      } else {
+        reply = running ? null : 'resume';
+        open.push('claude-app', 'terminal');
+      }
+    } else if (a.kind === 'session' && a.provider === 'codex') {
+      open.push('codex-app');
+      if (running) reply = null;
+      else if (a.status === 'idle' || a.status === 'done') {
+        reply = 'resume';
+        open.push('terminal');
+      } else reply = 'app';
+    }
+    if (a.projectPath) open.push('folder');
+    return { missionId: mission?.id, reply, canStop, open };
+  }
+
+  private usage(agents: AgentSnapshot[], now: number): UsageInfo {
+    const midnight = new Date(now).setHours(0, 0, 0, 0);
+    const tokensToday: UsageInfo['tokensToday'] = {};
+    for (const a of agents) if (a.lastActivityAt >= midnight) tokensToday[a.provider] = (tokensToday[a.provider] ?? 0) + a.tokens.total;
+    const missionCostUsd = (this.missions?.list ?? []).filter((m) => (m.endedAt ?? m.startedAt ?? 0) >= midnight).reduce((s, m) => s + (m.costUsd ?? 0), 0);
+    const { claude, codex } = usageGauges(now);
+    return { claude, codex, tokensToday, missionCostUsd };
   }
 
   private projects(agents: AgentSnapshot[]): ProjectSummary[] {
@@ -183,7 +291,29 @@ export type OfficeAction =
   | { type: 'fire'; id: string }
   | { type: 'rehire'; id: string }
   | { type: 'removeProject'; path: string }
-  | { type: 'restoreProject'; path: string };
+  | { type: 'restoreProject'; path: string }
+  | {
+      type: 'missionCreate';
+      title?: string;
+      prompt: string;
+      projectPath: string;
+      provider: MissionProvider;
+      permission: MissionPermission;
+      model?: string;
+      start: boolean;
+      /** Hand-off source worker. */
+      from?: string;
+      /** Give it to this idle worker (continues his session). */
+      assignee?: string;
+    }
+  | { type: 'missionStart'; id: string; assignee?: string }
+  | { type: 'missionStop'; id: string }
+  | { type: 'missionRemove'; id: string }
+  | { type: 'reply'; id: string; text: string; permission: MissionPermission }
+  | { type: 'stop'; id: string }
+  | { type: 'open'; id: string; target: OpenTarget }
+  | { type: 'pin'; path: string; room: RoomId | null }
+  | { type: 'peersDir'; dir: string | null };
 
 /** Applies a dashboard action. Only app state changes; real sessions and folders are never touched. */
 export function applyAction(office: Office, action: OfficeAction, latest: OfficeSnapshot, now: number): string | null {
@@ -206,9 +336,107 @@ export function applyAction(office: Office, action: OfficeAction, latest: Office
     case 'restoreProject':
       office.state.restoreProject(action.path, now);
       return null;
+    case 'pin':
+      if (action.room && !(action.room in ROOM_BY_ID)) return 'Unknown room.';
+      office.state.pin(action.path, action.room);
+      return null;
+    case 'peersDir':
+      return office.peers ? office.peers.setDir(action.dir) : 'Not available here.';
+    case 'missionCreate': {
+      const missions = office.missions;
+      if (!missions) return 'Missions are not available here.';
+      let sessionId: string | undefined;
+      let provider = action.provider;
+      if (action.assignee) {
+        const target = latest.agents.find((a) => a.id === action.assignee);
+        const sid = target ? sessionOf(target) : undefined;
+        if (!target || !sid || target.controls?.reply !== 'resume') return 'That worker cannot take a mission right now.';
+        sessionId = sid;
+        provider = target.provider as MissionProvider;
+      }
+      const source = action.from ? latest.agents.find((a) => a.id === action.from) : undefined;
+      const m = missions.add(
+        {
+          title: action.title,
+          prompt: action.prompt,
+          projectPath: action.projectPath,
+          provider,
+          permission: action.permission,
+          model: action.model,
+          from: source ? { agentId: source.id, persona: source.persona } : undefined,
+          sessionId,
+        },
+        now,
+      );
+      if (!action.start) return null;
+      const error = missions.start(m.id, now);
+      if (error) missions.remove(m.id);
+      return error;
+    }
+    case 'missionStart': {
+      const missions = office.missions;
+      if (!missions) return 'Missions are not available here.';
+      let sessionId: string | undefined;
+      if (action.assignee) {
+        const target = latest.agents.find((a) => a.id === action.assignee);
+        const m = missions.get(action.id);
+        sessionId = target ? sessionOf(target) : undefined;
+        if (!target || !sessionId || !m || target.controls?.reply !== 'resume') return 'That worker cannot take a mission right now.';
+        if (target.provider !== m.provider) m.provider = target.provider as MissionProvider;
+      }
+      return missions.start(action.id, now, sessionId);
+    }
+    case 'missionStop':
+      return office.missions ? office.missions.stop(action.id) : 'Not available here.';
+    case 'missionRemove':
+      return office.missions ? office.missions.remove(action.id) : 'Not available here.';
+    case 'reply': {
+      if (!agent || !office.missions) return 'That worker is no longer in the office.';
+      const sid = sessionOf(agent);
+      if (agent.controls?.reply !== 'resume' || !sid || !agent.projectPath) return 'This session is open in another app: reply there.';
+      const m = office.missions.add(
+        { title: `Reply: ${action.text}`, prompt: action.text, projectPath: agent.projectPath, provider: agent.provider as MissionProvider, permission: action.permission, sessionId: sid },
+        now,
+      );
+      const error = office.missions.start(m.id, now);
+      if (error) office.missions.remove(m.id);
+      return error;
+    }
+    case 'stop': {
+      if (!agent) return 'That worker is no longer in the office.';
+      const missionId = agent.controls?.missionId;
+      if (missionId && office.missions?.get(missionId)?.status === 'running') return office.missions.stop(missionId);
+      const live = agent.provider === 'claude-code' ? office.claude.liveInfo(agent.id) : undefined;
+      if (!agent.controls?.canStop || !live?.pid || live.entrypoint !== 'cli') return 'This session cannot be stopped from the office.';
+      killTree(live.pid);
+      return null;
+    }
+    case 'open': {
+      if (!agent) return 'That worker is no longer in the office.';
+      if (!agent.controls?.open.includes(action.target)) return 'Not available for this session.';
+      const sid = sessionOf(agent);
+      switch (action.target) {
+        case 'folder':
+          return agent.projectPath ? openFolder(agent.projectPath) : 'No project folder.';
+        case 'claude-app':
+          return openClaudeDesktop(office.claude.liveInfo(agent.id)?.hostSessionId, sid);
+        case 'codex-app':
+          return sid ? openCodexThread(sid) : 'Unknown Codex thread.';
+        case 'terminal':
+          return sid && agent.projectPath ? resumeInTerminal(agent.provider as MissionProvider, sid, agent.projectPath) : 'Unknown session.';
+      }
+      return 'Unknown target.';
+    }
     default:
       return 'Unknown action.';
   }
+}
+
+/** The CLI session id behind an agent ("claude:<uuid>" / "codex:<uuid>"). */
+function sessionOf(a: AgentSnapshot): string | undefined {
+  if (a.host || a.kind !== 'session') return undefined;
+  const m = a.id.match(/^(?:claude|codex):(.+)$/);
+  return m && isUuid(m[1]) ? m[1] : undefined;
 }
 
 function page(s: NeoSession, neo: NeoCollector): NeoPage {

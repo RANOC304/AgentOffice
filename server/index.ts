@@ -1,14 +1,20 @@
-// AgentOffice local server: loopback only, read-only, streams office snapshots over SSE.
+// AgentOffice local server: loopback only, streams office snapshots over SSE. Collectors only read
+// local files; the only things the office starts are missions and replies you launch yourself.
 
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ROOM_BY_ID, type RoomId } from '../shared/rooms.ts';
+import type { MissionPermission, MissionProvider, OpenTarget } from '../shared/types.ts';
 import { config } from './config.ts';
+import { dayKey, History } from './history.ts';
+import { tools } from './launchers.ts';
 import { cleanNames, NAMES_FILE } from './names.ts';
 import { applyAction, Office, type OfficeAction } from './office.ts';
 
 const office = new Office();
+const history = new History();
 const distDir = fileURLToPath(new URL('../dist', import.meta.url));
 
 if (process.argv.includes('--once')) {
@@ -43,10 +49,13 @@ function start() {
   let latest = office.snapshot();
   let latestJson = JSON.stringify(latest);
   const clients = new Set<http.ServerResponse>();
+  // Look up the Claude Code and Codex CLIs once the server is up (it can take a second).
+  setTimeout(() => tools(), 1500);
 
   const tick = () => {
     try {
       latest = office.snapshot();
+      history.record(latest);
       const json = JSON.stringify(latest);
       const changed = json.replace(/"generatedAt":\d+/, '') !== latestJson.replace(/"generatedAt":\d+/, '');
       latestJson = json;
@@ -126,6 +135,27 @@ function start() {
       return;
     }
 
+    if (url.pathname === '/api/standup') {
+      const day = url.searchParams.get('day') ?? dayKey(Date.now());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        res.writeHead(400, common).end();
+        return;
+      }
+      history.standup(day, office.missions?.list ?? []).then(
+        (report) => res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(report)),
+        () => res.writeHead(500, common).end(),
+      );
+      return;
+    }
+    if (url.pathname === '/api/replay/days') {
+      res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ days: history.days() }));
+      return;
+    }
+    if (url.pathname === '/api/replay') {
+      const day = url.searchParams.get('day') ?? dayKey(Date.now());
+      res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(history.replay(day)));
+      return;
+    }
     if (url.pathname === '/api/snapshot') {
       res.writeHead(200, { ...common, 'content-type': 'application/json; charset=utf-8' }).end(latestJson);
       return;
@@ -193,12 +223,53 @@ function readJson(
   });
 }
 
+const PERMISSIONS: MissionPermission[] = ['read-only', 'edit', 'full'];
+const PROVIDERS: MissionProvider[] = ['claude-code', 'codex'];
+const TARGETS: OpenTarget[] = ['claude-app', 'codex-app', 'terminal', 'folder'];
+
 function parseAction(body: unknown): OfficeAction | null {
   if (!body || typeof body !== 'object') return null;
   const b = body as Record<string, unknown>;
   const str = (v: unknown, max: number) => (typeof v === 'string' && v.length > 0 && v.length <= max ? v : null);
+  const opt = (v: unknown, max: number) => (v === undefined || v === null || v === '' ? undefined : (str(v, max) ?? false));
   const id = str(b.id, 200);
+  const permission = PERMISSIONS.includes(b.permission as MissionPermission) ? (b.permission as MissionPermission) : null;
   switch (b.type) {
+    case 'missionCreate': {
+      const prompt = str(b.prompt, 8000);
+      const projectPath = str(b.projectPath, 500);
+      const provider = PROVIDERS.includes(b.provider as MissionProvider) ? (b.provider as MissionProvider) : null;
+      const title = opt(b.title, 120);
+      const model = opt(b.model, 80);
+      const from = opt(b.from, 200);
+      const assignee = opt(b.assignee, 200);
+      if (!prompt || !projectPath || !provider || !permission || title === false || model === false || from === false || assignee === false) return null;
+      if (model && !/^[\w.:\-[\]]+$/.test(model)) return null;
+      return { type: 'missionCreate', prompt, projectPath, provider, permission, title, model, from, assignee, start: b.start === true };
+    }
+    case 'missionStart': {
+      const assignee = opt(b.assignee, 200);
+      return id && assignee !== false ? { type: 'missionStart', id, assignee } : null;
+    }
+    case 'missionStop':
+    case 'missionRemove':
+    case 'stop':
+      return id ? { type: b.type, id } : null;
+    case 'reply': {
+      const text = str(b.text, 8000);
+      return id && text && permission ? { type: 'reply', id, text, permission } : null;
+    }
+    case 'open':
+      return id && TARGETS.includes(b.target as OpenTarget) ? { type: 'open', id, target: b.target as OpenTarget } : null;
+    case 'pin': {
+      const p = str(b.path, 500);
+      const room = b.room === null ? null : typeof b.room === 'string' && b.room in ROOM_BY_ID ? (b.room as RoomId) : undefined;
+      return p && room !== undefined ? { type: 'pin', path: p, room } : null;
+    }
+    case 'peersDir': {
+      const dir = b.dir === null ? null : str(b.dir, 500);
+      return dir === null && b.dir !== null ? null : { type: 'peersDir', dir };
+    }
     case 'rename': {
       const name = str(b.name, 60);
       return id && name ? { type: 'rename', id, name } : null;

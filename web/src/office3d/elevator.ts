@@ -182,6 +182,20 @@ export class Elevator {
     if (!this.departures.includes(id)) this.departures.push(id);
   }
 
+  /** Empties the cabin and the queues at once (the office is being rebuilt, e.g. for a replay). */
+  reset() {
+    this.arrivals = [];
+    this.departures = [];
+    this.job = null;
+    this.steps = [];
+    this.move = null;
+    this.wait = 0;
+    this.y = TOP_Y;
+    this.doorTarget = 0;
+    this.doors = 0;
+    this.status = 'idle';
+  }
+
   cancel(id: string) {
     this.arrivals = this.arrivals.filter((a) => a !== id);
     this.departures = this.departures.filter((a) => a !== id);

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AgentSnapshot, NeoPage } from '../../../shared/types.ts';
+import type { AgentSnapshot, Mission, NeoPage } from '../../../shared/types.ts';
 import { ChatFeed, type ChatFeedHandle } from './ChatFeed.tsx';
-import { type CameraMode, OfficeScene, type TagMode } from './scene.ts';
+import type { BossView } from './player.ts';
+import { type BossState, type CameraMode, OfficeScene, type TagMode } from './scene.ts';
 
 interface Props {
   /** null until the first snapshot arrives, so current sessions are placed directly at their desks. */
@@ -11,6 +12,33 @@ interface Props {
   onSelect: (id: string | null) => void;
   onScreen: (sessionId: string | null) => void;
   focusRequest: { id: string; at: number } | null;
+  /** Changing it clears the office at once (replay start/stop, big jumps in time). */
+  resetKey: number;
+  /** Live missions, for the hand-off walk-overs. */
+  missions?: Mission[];
+  /** Projects pinned to rooms, shown on the room signs. */
+  pins: Array<{ room: string; name: string }>;
+  replaying: boolean;
+  /** Replay time (ms) when replaying. */
+  replayTime?: number;
+  onReplay: () => void;
+}
+
+function readFlag(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === 'on';
+  } catch {
+    return fallback;
+  }
+}
+
+function writeFlag(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? 'on' : 'off');
+  } catch {
+    // private mode
+  }
 }
 
 function readAutoIdle(): boolean {
@@ -21,7 +49,7 @@ function readAutoIdle(): boolean {
   }
 }
 
-export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen, focusRequest }: Props) {
+export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen, focusRequest, resetKey, missions, pins, replaying, replayTime, onReplay }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<OfficeScene | null>(null);
   const chatRef = useRef<ChatFeedHandle>(null);
@@ -37,8 +65,26 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
   const [follow, setFollow] = useState(false);
   const [mode, setMode] = useState<CameraMode>('orbit');
   const [autoIdle, setAutoIdle] = useState(readAutoIdle);
+  const [invertDrag, setInvertDrag] = useState(() => readFlag('agentoffice.invertDrag', true));
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   const [error, setError] = useState<string | null>(null);
+  const [boss, setBoss] = useState<BossState | null>(null);
+  const [bossView, setBossView] = useState<BossView>(() => {
+    try {
+      return localStorage.getItem('agentoffice.bossView') === 'fpv' ? 'fpv' : 'tpv';
+    } catch {
+      return 'tpv';
+    }
+  });
+  const chooseView = (v: BossView) => {
+    setBossView(v);
+    sceneRef.current?.setBossView(v);
+    try {
+      localStorage.setItem('agentoffice.bossView', v);
+    } catch {
+      // private mode
+    }
+  };
 
   useEffect(() => {
     let scene: OfficeScene | null = null;
@@ -53,9 +99,14 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
           onModeChange: (m) => setMode(m),
           onScreen: (id) => onScreenRef.current(id),
           onChatter: (line) => chatRef.current?.chatter(line),
+          onBoss: (state) => {
+            setBoss(state);
+            if (state) setBossView(state.view);
+          },
         });
         sceneRef.current = scene;
         scene.setAutoIdle(readAutoIdle());
+        scene.setInvertDrag(readFlag('agentoffice.invertDrag', true));
         if (agentsRef.current) scene.setData(agentsRef.current, pagesRef.current);
       } catch (e) {
         setError((e as Error).message || 'WebGL is not available');
@@ -68,9 +119,29 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
     };
   }, []);
 
+  const lastReset = useRef(resetKey);
   useEffect(() => {
-    if (agents) sceneRef.current?.setData(agents, neoPages);
-  }, [agents, neoPages]);
+    const scene = sceneRef.current;
+    if (!scene) return;
+    scene.setTimeOffset(replayTime ? replayTime - Date.now() : 0);
+    if (resetKey !== lastReset.current) {
+      lastReset.current = resetKey;
+      scene.reset();
+    }
+    if (agents) scene.setData(agents, neoPages);
+  }, [agents, neoPages, resetKey, replayTime]);
+  useEffect(() => sceneRef.current?.setPins(pins), [pins]);
+  // Hand-offs: the giver walks over to the worker who takes the mission.
+  const handed = useRef(new Set<string>());
+  useEffect(() => {
+    for (const m of missions ?? []) {
+      if (!m.from || !m.agentId || m.status !== 'running') continue;
+      const key = `${m.id}:${m.runs}`;
+      if (handed.current.has(key)) continue;
+      handed.current.add(key);
+      sceneRef.current?.handoff(m.from.agentId, m.agentId, m.projectName);
+    }
+  }, [missions]);
   useEffect(() => sceneRef.current?.setSelected(selectedId), [selectedId]);
   useEffect(() => sceneRef.current?.setTags(tags), [tags]);
   useEffect(() => sceneRef.current?.setFollow(follow), [follow]);
@@ -82,6 +153,10 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
       // private mode
     }
   }, [autoIdle]);
+  useEffect(() => {
+    sceneRef.current?.setInvertDrag(invertDrag);
+    writeFlag('agentoffice.invertDrag', invertDrag);
+  }, [invertDrag]);
   useEffect(() => {
     if (focusRequest) sceneRef.current?.focus(focusRequest.id);
   }, [focusRequest]);
@@ -108,6 +183,11 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const key = e.key.toLowerCase();
+      // Boss mode uses the keyboard to walk; only full screen stays on F.
+      if (modeRef.current === 'boss') {
+        if (key === 'f') toggleFullscreen();
+        return;
+      }
       // The idle tour only stops from its button, so shortcuts leave it alone.
       if (modeRef.current === 'tour') {
         if (key === 'f') toggleFullscreen();
@@ -125,7 +205,7 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
   return (
     <div className={`office mode-${mode}`} ref={ref}>
       {error && <div className="office-loading">3D view unavailable: {error}</div>}
-      <ChatFeed ref={chatRef} agents={agents} onSelect={(id) => onSelectRef.current(id)} />
+      <ChatFeed ref={chatRef} agents={agents} resetKey={resetKey} onSelect={(id) => onSelectRef.current(id)} />
       {mode === 'free' && (
         <div className="freecam-hud">
           Free camera · <kbd>Z</kbd>
@@ -135,13 +215,29 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
         </div>
       )}
       {mode === 'tour' && <div className="freecam-hud">Idle tour · click Idle tour again to stop it</div>}
+      {mode === 'boss' && (
+        <div className="freecam-hud boss-hud">
+          {!boss?.arrived ? (
+            'The elevator is bringing you up to the office…'
+          ) : (
+            <>
+              👔 Boss · <kbd>Z</kbd>
+              <kbd>Q</kbd>
+              <kbd>S</kbd>
+              <kbd>D</kbd> walk · <kbd>Shift</kbd> run · {boss.locked ? 'mouse turns your head · Esc frees the mouse' : 'click the office to look around with the mouse'} · <kbd>V</kbd>{' '}
+              {bossView === 'fpv' ? 'third person' : 'first person'} · <kbd>E</kbd> or click: talk to a worker{bossView === 'tpv' ? ' · scroll: camera distance' : ''}
+            </>
+          )}
+        </div>
+      )}
+      {mode === 'boss' && bossView === 'fpv' && boss?.arrived && <div className="crosshair" aria-hidden="true" />}
       <div className="office-controls" role="toolbar" aria-label="Office view controls">
         {mode === 'orbit' && (
           <>
-            <button type="button" onClick={() => sceneRef.current?.zoom(0.75)} aria-label="Zoom in" title="Zoom in">
+            <button type="button" onClick={() => sceneRef.current?.zoom('in')} aria-label="Zoom in" title="Zoom in">
               +
             </button>
-            <button type="button" onClick={() => sceneRef.current?.zoom(1.33)} aria-label="Zoom out" title="Zoom out">
+            <button type="button" onClick={() => sceneRef.current?.zoom('out')} aria-label="Zoom out" title="Zoom out">
               −
             </button>
             <button type="button" onClick={() => sceneRef.current?.setHome(false)} aria-label="Reset view" title="Reset the camera (double-click also works)">
@@ -150,7 +246,34 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
             <button type="button" className={follow ? 'on' : ''} aria-pressed={follow} onClick={() => setFollow((f) => !f)} title="Camera follows the selected agent">
               Follow
             </button>
+            <button
+              type="button"
+              className="soft"
+              onClick={() => setInvertDrag((v) => !v)}
+              title="Drag direction: 'camera' moves the camera the way you drag, 'office' drags the office like a map"
+            >
+              Drag: {invertDrag ? 'camera' : 'office'}
+            </button>
           </>
+        )}
+        {mode === 'boss' ? (
+          <>
+            <div className="seg" role="group" aria-label="View">
+              <button type="button" className={bossView === 'fpv' ? 'on' : ''} aria-pressed={bossView === 'fpv'} onClick={() => chooseView('fpv')} title="First person: see through your eyes (V)">
+                FPV
+              </button>
+              <button type="button" className={bossView === 'tpv' ? 'on' : ''} aria-pressed={bossView === 'tpv'} onClick={() => chooseView('tpv')} title="Third person: the camera follows you (V)">
+                TPV
+              </button>
+            </div>
+            <button type="button" className="on" onClick={() => sceneRef.current?.setMode('orbit')} title="Walk back to the elevator and get the normal camera back">
+              Leave office
+            </button>
+          </>
+        ) : (
+          <button type="button" className="boss-btn" onClick={() => sceneRef.current?.spawnBoss(bossView)} title="Become the boss: ride the elevator up and walk around the office">
+            👔 Be the boss
+          </button>
         )}
         <button type="button" className={mode === 'free' ? 'on' : ''} aria-pressed={mode === 'free'} onClick={toggleFree} title="Fly freely with Z Q S D and the mouse (C)">
           Free cam
@@ -170,11 +293,14 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
         <button type="button" onClick={() => setTags((t) => (t === 'auto' ? 'all' : t === 'all' ? 'none' : 'auto'))} title="Name tags: auto hides them when zoomed far out">
           Names: {tags}
         </button>
+        <button type="button" className={replaying ? 'on' : ''} aria-pressed={replaying} onClick={onReplay} title="Replay the day: scrub back through the office and its chat">
+          {replaying ? 'Live' : 'Replay'}
+        </button>
         <button type="button" className={fullscreen ? 'on' : ''} aria-pressed={fullscreen} onClick={toggleFullscreen} title="Full screen (F)">
           {fullscreen ? 'Exit full screen' : 'Full screen'}
         </button>
       </div>
-      {mode === 'orbit' && <p className="office-hint">Drag to rotate · right-drag to pan · scroll to zoom · click someone or the Neo screen</p>}
+      {mode === 'orbit' && <p className="office-hint">Drag to rotate · right-drag to pan · scroll zooms where the cursor points · click someone or the Neo screen</p>}
     </div>
   );
 }

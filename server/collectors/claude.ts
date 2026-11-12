@@ -21,6 +21,8 @@ interface LiveInfo {
   kind?: string;
   startedAt?: number;
   updatedAt?: number;
+  /** Claude desktop's own id for the session (local_…), for deep links. */
+  hostSessionId?: string;
 }
 
 interface Tracked {
@@ -87,6 +89,20 @@ export class ClaudeCollector {
   private lastSubagentScan = 0;
   private recentTranscripts = new Map<string, number>();
   status: SourceStatus = { id: 'claude-code', label: 'Claude Code', ok: false, path: this.projectsDir };
+  /** Sessions to keep in the office (idle) after they stop writing, e.g. finished missions. */
+  retain?: (sessionId: string) => boolean;
+
+  /** Live registry entry of a Claude Code session (agent id "claude:<uuid>"), if it is running. */
+  liveInfo(agentId: string): LiveInfo | undefined {
+    return this.sessions.get(agentId.slice(7))?.live;
+  }
+
+  /** Starts following a session right away (a mission just started or resumed it). */
+  watch(sessionId: string) {
+    if (this.sessions.has(sessionId)) return;
+    const file = this.findTranscript(sessionId);
+    if (file) this.track(sessionId, file);
+  }
 
   poll(now: number): AgentSnapshot[] {
     if (!fs.existsSync(this.projectsDir)) {
@@ -422,8 +438,9 @@ export class ClaudeCollector {
       if (live.updatedAt) r.touch(Math.min(live.updatedAt, now));
     } else {
       // Not registered as live: a headless run still writing, or a session that just ended.
+      const retained = this.retain?.(r.id.slice(7)) ?? false;
       if (now - t.lastRecordAt < 60_000) status = 'working';
-      else status = 'done';
+      else status = retained ? 'idle' : 'done';
       const last = Math.max(t.lastRecordAt, t.lastSeenLive);
       if (status === 'done' && now - last > config.doneLingerMinutes * 60_000) return null;
       if (!r.app || r.app === 'Claude Code') r.app = 'Claude Code (headless)';

@@ -1,4 +1,4 @@
-import { PROVIDER_META } from '../../../shared/rooms.ts';
+import { DOMAIN_ROOMS, PROVIDER_META, ROOM_BY_ID, type RoomId } from '../../../shared/rooms.ts';
 import type { AgentSnapshot, ProjectSummary } from '../../../shared/types.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { act } from '../api.ts';
@@ -7,12 +7,14 @@ import { ago } from '../format.ts';
 export function Projects({
   projects,
   removed,
+  pins,
   agents,
   onSelect,
   demo,
 }: {
   projects: ProjectSummary[];
   removed: Array<{ path: string; name: string; removedAt: number }>;
+  pins: Array<{ path: string; room: RoomId }>;
   agents: AgentSnapshot[];
   onSelect: (id: string | null, focus?: boolean) => void;
   demo: boolean;
@@ -73,6 +75,23 @@ Only AgentOffice forgets it: nothing on disk changes. It comes back automaticall
                 ))}
               </span>
             </div>
+            <label className="pin">
+              <span aria-hidden="true">📌</span>
+              <select
+                value={pins.find((x) => x.path.toLowerCase() === p.path.toLowerCase())?.room ?? ''}
+                disabled={demo}
+                aria-label={`Room for ${p.name}`}
+                title="Pin this project to a room: its workers sit there"
+                onChange={(e) => void act({ type: 'pin', path: p.path, room: (e.target.value || null) as RoomId | null }).then((err) => err && window.alert(err))}
+              >
+                <option value="">Room: automatic</option>
+                {DOMAIN_ROOMS.map((r) => (
+                  <option key={r} value={r}>
+                    {ROOM_BY_ID[r].icon} {ROOM_BY_ID[r].label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <p className="project-meta">
               {p.working} working · {p.waiting} need you · active {ago(p.lastActivityAt)}
               {p.git?.branch && ` · ⎇ ${p.git.branch}`}

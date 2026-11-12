@@ -53,6 +53,8 @@ export class Names {
   private assignments = new Map<string, Assignment>();
   private dirty = false;
   private lastSave = 0;
+  /** Peer mode keeps names in memory: the main office names everyone. */
+  persist = true;
 
   constructor() {
     this.loadList();
@@ -147,6 +149,7 @@ export class Names {
   }
 
   private save(now: number) {
+    if (!this.persist) return;
     try {
       fs.mkdirSync(path.dirname(ASSIGN_FILE), { recursive: true });
       fs.writeFileSync(ASSIGN_FILE, JSON.stringify(Object.fromEntries(this.assignments), null, 1), 'utf8');

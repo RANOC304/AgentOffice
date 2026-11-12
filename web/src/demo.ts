@@ -137,5 +137,21 @@ export function demoSnapshot(start: number, now: number): OfficeSnapshot {
     fired: [],
     removedProjects: [],
     windowMs: 3 * 3600_000,
+    missions: [],
+    usage: {
+      claude: [
+        { id: 'claude-5h', label: '5-hour limit', usedPercent: 42, at: now },
+        { id: 'claude-week', label: 'Weekly limit', usedPercent: 63, at: now },
+      ],
+      codex: [
+        { id: 'codex-primary', label: '5-hour limit', usedPercent: 18, resetsAt: now + 3 * 3600_000, at: now },
+        { id: 'codex-secondary', label: 'Weekly limit', usedPercent: 86, resetsAt: now + 2 * 86_400_000, at: now },
+      ],
+      tokensToday: {},
+      missionCostUsd: 0,
+    },
+    peers: { list: [] },
+    pins: [],
+    launchers: { 'claude-code': false, codex: false },
   };
 }

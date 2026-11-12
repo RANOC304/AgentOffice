@@ -2,7 +2,7 @@
   "name": "agentoffice",
   "version": "0.1.0",
   "private": true,
-  "description": "Private, local-only pixel-art office that visualises Claude, Codex and ChatGPT agent sessions.",
+  "description": "Private, local-only 3D office that shows your Claude, Codex and ChatGPT agent sessions, with missions you can launch from it.",
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -14,7 +14,8 @@
     "start": "vite build && node --disable-warning=ExperimentalWarning server/index.ts",
     "serve": "node --disable-warning=ExperimentalWarning server/index.ts",
     "check": "tsc -p tsconfig.json",
-    "snapshot": "node --disable-warning=ExperimentalWarning server/index.ts --once"
+    "snapshot": "node --disable-warning=ExperimentalWarning server/index.ts --once",
+    "peer": "node --disable-warning=ExperimentalWarning server/peer.ts"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "^5.3.0",

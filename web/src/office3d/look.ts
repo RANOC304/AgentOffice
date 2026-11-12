@@ -21,6 +21,8 @@ export interface Look {
   badge: boolean;
   height: number;
   build: number;
+  /** Tie colour (the boss's suit). */
+  tie?: string;
 }
 
 const SKINS = ['#f2cfb3', '#e8b994', '#d9a27c', '#bf8460', '#9a6243', '#73452d', '#f5d6bf'];
@@ -58,6 +60,24 @@ function tint(hex: string, amt: number): string {
   const b = ch(n & 255);
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
 }
+
+/** You: dark suit, white collar, red tie, a little taller than everyone. */
+export const BOSS_LOOK: Look = {
+  skin: '#e8b994',
+  hair: '#2b2b30',
+  hairStyle: 'side',
+  beard: 'stubble',
+  top: 'shirt',
+  shirt: '#1e2638',
+  pants: '#1a2030',
+  shoes: '#1c1c20',
+  glasses: false,
+  cap: false,
+  badge: false,
+  height: 1.06,
+  build: 1.08,
+  tie: '#c0392b',
+};
 
 export function lookFor(id: string, provider: Provider, kind: AgentKind): Look {
   const r = rng(hash(id));

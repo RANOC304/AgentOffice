@@ -6,16 +6,20 @@ import type { RoomId } from '../../../shared/rooms.ts';
 import type { AgentSnapshot } from '../../../shared/types.ts';
 import { BOTTOM, type Elevator } from './elevator.ts';
 import { cellCenter, ELEVATOR, type Layout, type Seat, type Spot } from './layout.ts';
-import { hash, lookFor } from './look.ts';
+import { BOSS_LOOK, hash, type Look, lookFor } from './look.ts';
 import type { Nav, P } from './nav.ts';
 import { Person, type Prop } from './person.ts';
 import { pose, type PoseName } from './poses.ts';
+import { bossLine, conversation, idleLine, type Line, type TalkCtx, type Where, workThought } from './talk.ts';
+
+/** You, when you walk around the office. */
+export const BOSS_ID = 'boss';
 
 const FLOOR_Y = 0.02;
 const WALK = 2.1;
 
-type Mode = 'hidden' | 'riding' | 'stepping' | 'walking' | 'acting' | 'queue';
-type ActKind = 'work' | 'wait' | 'brew' | 'coffee' | 'chat' | 'meeting' | 'sofa' | 'window' | 'pingpong' | 'arcade' | 'watch' | 'stand' | 'leave';
+type Mode = 'hidden' | 'riding' | 'stepping' | 'walking' | 'acting' | 'queue' | 'player';
+type ActKind = 'work' | 'wait' | 'brew' | 'coffee' | 'chat' | 'meeting' | 'sofa' | 'window' | 'pingpong' | 'arcade' | 'watch' | 'stand' | 'leave' | 'visit';
 
 interface Act {
   kind: ActKind;
@@ -31,8 +35,20 @@ interface Act {
 
 export interface Bubble {
   text: string;
-  kind: 'say' | 'think' | 'action' | 'ask' | 'idle';
+  /** say/think/ask/action come from the real session; chat and idle are office small talk. */
+  kind: 'say' | 'think' | 'action' | 'ask' | 'idle' | 'chat';
   until: number;
+}
+
+/** A conversation between two characters, spoken line by line. */
+interface Talk {
+  /** order[0] started the current topic. */
+  order: [string, string];
+  where: Where;
+  topic: string;
+  lines: Line[];
+  i: number;
+  nextAt: number;
 }
 
 export interface Char {
@@ -56,33 +72,37 @@ export interface Char {
   nextBubbleAt: number;
   speaking: boolean;
   nextSwap: number;
+  /** Real session lines already said, so each one is said once. */
+  said: Set<string>;
+  /** Small-talk lines said recently, so they do not repeat. */
+  npcSaid: Set<string>;
+  lastActivity: string;
+  lastAsk: string;
+  /** Key of the conversation this character is part of. */
+  talk: string | null;
+  /** Hand-off visit in progress. */
+  visit?: { to: string; project?: string; stage: number };
+  /** Boss mode: walking speed set by the player controller (m/s). */
+  playerSpeed?: number;
+  /** When this worker may talk to the boss again. */
+  bossNextAt?: number;
+  metBoss?: boolean;
+  /** Turn toward the boss until then (standing workers). */
+  faceBossUntil?: number;
 }
-
-const IDLE_LINES = [
-  'Coffee first, then the next prompt ☕',
-  'Ready when you are!',
-  'Anyone seen my cached tokens?',
-  'That last task went well 😌',
-  'Ping me if you need me',
-  'Stretching my attention heads',
-  'Tabs or spaces? Discuss.',
-  'Who left the GPU running?',
-];
-const CHAT_OPENERS = [
-  'Hey {p}, how is {project} going?',
-  '{p}! Did your tests pass?',
-  'Busy day, {p}?',
-  'What are you working on, {p}?',
-  'This coffee is excellent, {p}.',
-];
-const CHAT_REPLIES = ['All green on my side ✅', 'Just shipped a fix 🚀', 'Waiting for the next prompt', 'Still thinking about it 🤔', 'Refactoring, as usual', 'Pretty good, thanks!'];
-const PINGPONG = ['Nice shot! 🏓', 'Point for me!', 'Rematch?', 'Watch this spin'];
 
 export class Sim {
   readonly chars = new Map<string, Char>();
   private seatOwner = new Map<string, string>();
   private spotOwner = new Map<string, string>();
   private initialized = false;
+  private talks = new Map<string, Talk>();
+  private recentTopics: string[] = [];
+  /** Small-talk lines said anywhere in the office recently, so two characters do not echo each other. */
+  private recentNpc = new Map<string, number>();
+  private arrivals: Array<{ id: string; at: number }> = [];
+  /** Hand-offs waiting for both workers to be in place: the giver walks over to the receiver. */
+  private handoffs: Array<{ from: string; to: string; at: number; project?: string }> = [];
   private layout: Layout;
   private nav: Nav;
   private elevator: Elevator;
@@ -90,6 +110,15 @@ export class Sim {
   private removeFromScene: (c: Char) => void;
   selectedId: string | null = null;
   hoverId: string | null = null;
+  /** Shifts the office clock, so a replay runs on the recorded day's time. */
+  offset = 0;
+
+  clock(): number {
+    return Date.now() + this.offset;
+  }
+  /** Called when the boss steps out of the elevator and can be controlled. */
+  onBossArrived?: (c: Char) => void;
+  private bossTalkAt = 0;
   /** Called whenever a character says or thinks something in a bubble. */
   onChatter?: (c: Char, kind: Bubble['kind'], text: string) => void;
 
@@ -129,7 +158,7 @@ export class Sim {
       if (key !== c.wantKey && (c.mode === 'acting' || c.mode === 'walking')) this.decide(c, now, false);
     }
     for (const c of this.chars.values()) {
-      if (present.has(c.id)) continue;
+      if (present.has(c.id) || c.id === BOSS_ID) continue;
       if (!isLeaving(c) && c.mode !== 'hidden' && c.mode !== 'riding' && c.mode !== 'stepping') this.leave(c, now);
       if (c.mode === 'hidden') {
         this.elevator.cancel(c.id);
@@ -139,8 +168,8 @@ export class Sim {
     this.initialized = true;
   }
 
-  private create(agent: AgentSnapshot, now: number): Char {
-    const person = new Person(lookFor(agent.id, agent.provider, agent.kind));
+  private create(agent: AgentSnapshot, now: number, look?: Look, viaElevator = false): Char {
+    const person = new Person(look ?? lookFor(agent.id, agent.provider, agent.kind));
     const h = hash(agent.id);
     const c: Char = {
       id: agent.id,
@@ -162,10 +191,17 @@ export class Sim {
       nextBubbleAt: now + 2000 + (h % 6000),
       speaking: false,
       nextSwap: 0,
+      // Lines from before the character showed up are history: only the latest may still be said.
+      said: new Set(agent.lines.slice(0, -1).map(lineKey)),
+      npcSaid: new Set(),
+      lastActivity: agent.activity,
+      lastAsk: '',
+      talk: null,
     };
+    for (const l of agent.lines) if (now - l.at > 2 * 60_000) c.said.add(lineKey(l));
     this.chars.set(agent.id, c);
     this.addToScene(c);
-    if (!this.initialized) {
+    if (!this.initialized && !viaElevator) {
       this.decide(c, now, true);
     } else {
       person.root.visible = false;
@@ -180,6 +216,143 @@ export class Sim {
     this.removeFromScene(c);
     c.person.dispose();
     if (this.selectedId === c.id) this.selectedId = null;
+  }
+
+  get boss(): Char | undefined {
+    return this.chars.get(BOSS_ID);
+  }
+
+  /** You come into the office: the elevator brings you up from below the island. */
+  spawnBoss(): Char {
+    const old = this.chars.get(BOSS_ID);
+    if (old) {
+      this.elevator.cancel(BOSS_ID);
+      this.destroy(old);
+    }
+    const now = this.clock();
+    const agent: AgentSnapshot = {
+      id: BOSS_ID,
+      persona: 'Boss',
+      provider: 'claude-code',
+      kind: 'session',
+      name: 'You',
+      app: 'AgentOffice',
+      status: 'idle',
+      activity: 'Visiting the office',
+      room: 'atrium',
+      domain: 'atrium',
+      usingBrowser: false,
+      startedAt: now,
+      lastActivityAt: now,
+      tokens: { input: 0, output: 0, cached: 0, total: 0 },
+      counts: { turns: 0, tools: 0, edits: 0, commands: 0, reads: 0, searches: 0, browser: 0, subagents: 0, errors: 0 },
+      topTools: [],
+      filesTouched: [],
+      lines: [],
+      recent: [],
+      pulses: [],
+    };
+    for (const c of this.chars.values()) c.metBoss = false;
+    return this.create(agent, now, BOSS_LOOK, true);
+  }
+
+  /** You leave: walk to the elevator and ride down (or vanish if you had not arrived yet). */
+  leaveBoss() {
+    const c = this.chars.get(BOSS_ID);
+    if (!c) return;
+    if (c.mode === 'player') {
+      c.playerSpeed = 0;
+      this.leave(c, this.clock());
+      return;
+    }
+    if (!this.elevator.isRiding(BOSS_ID)) {
+      this.elevator.cancel(BOSS_ID);
+      this.destroy(c);
+    }
+  }
+
+  /** The worker nearest to the boss (within reach) says something to him right away. */
+  greetBoss(id?: string): string | null {
+    const boss = this.chars.get(BOSS_ID);
+    if (!boss || boss.mode !== 'player') return null;
+    const target = id ? this.chars.get(id) : this.nearestToBoss(boss, 3.2, true);
+    if (!target || target === boss) return null;
+    this.talkToBoss(target, boss, this.clock());
+    return target.id;
+  }
+
+  private nearestToBoss(boss: Char, reach: number, ignoreCooldown: boolean, now = 0): Char | undefined {
+    let best: Char | undefined;
+    let bestD = reach;
+    for (const c of this.chars.values()) {
+      if (c === boss || c.mode === 'hidden' || c.mode === 'riding' || c.mode === 'stepping' || isLeaving(c)) continue;
+      if (!ignoreCooldown && now < (c.bossNextAt ?? 0)) continue;
+      const d = Math.hypot(c.x - boss.x, c.z - boss.z);
+      if (d < bestD) {
+        best = c;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  private talkToBoss(c: Char, boss: Char, now: number) {
+    const line = bossLine(c.agent, this.talkCtx(now), c.npcSaid, !c.metBoss, Boolean(c.talk));
+    c.npcSaid.add(line);
+    c.metBoss = true;
+    c.bossNextAt = now + 25_000 + Math.random() * 20_000;
+    c.faceBossUntil = now + 6500;
+    this.bossTalkAt = now + 3200;
+    this.say(c, line, c.agent.status === 'waiting' ? 'ask' : 'chat', Math.min(9000, 3200 + line.length * 55));
+    void boss;
+  }
+
+  /** Workers near the boss talk to him, one at a time. */
+  private updateBoss(now: number) {
+    const boss = this.chars.get(BOSS_ID);
+    if (!boss || boss.mode !== 'player' || now < this.bossTalkAt) return;
+    const c = this.nearestToBoss(boss, 2.6, false, now);
+    if (c) this.talkToBoss(c, boss, now);
+  }
+
+  /** Removes everyone at once; the next sync places the workers directly at their spots. */
+  reset() {
+    for (const c of [...this.chars.values()]) this.destroy(c);
+    this.talks.clear();
+    this.seatOwner.clear();
+    this.spotOwner.clear();
+    this.arrivals = [];
+    this.handoffs = [];
+    this.elevator.reset();
+    this.initialized = false;
+  }
+
+  /** One worker brings his result over to another (a mission hand-off). */
+  handoff(from: string, to: string, project?: string) {
+    if (from === to || this.handoffs.some((h) => h.from === from && h.to === to)) return;
+    this.handoffs.push({ from, to, at: this.clock(), project });
+  }
+
+  private updateHandoffs(now: number) {
+    for (let i = this.handoffs.length - 1; i >= 0; i--) {
+      const h = this.handoffs[i];
+      if (now - h.at > 4 * 60_000) {
+        this.handoffs.splice(i, 1);
+        continue;
+      }
+      const a = this.chars.get(h.from);
+      const b = this.chars.get(h.to);
+      if (!a || !b || a.mode !== 'acting' || isLeaving(a) || b.mode !== 'acting' || !b.act) continue;
+      this.handoffs.splice(i, 1);
+      // Stand next to the receiver, facing him.
+      const angle = b.heading + Math.PI / 2;
+      const cell = this.nav.nearestFree(b.x + Math.sin(angle) * 0.9, b.z + Math.cos(angle) * 0.9);
+      const p = cellCenter(cell);
+      const heading = Math.atan2(b.x - p.x, b.z - p.z);
+      this.releaseAll(a);
+      this.goTo(a, { kind: 'visit', x: p.x, z: p.z, heading, until: Infinity, partner: b.id, prop: null }, false);
+      a.visit = { to: b.id, project: h.project, stage: 0 };
+    }
   }
 
   // ------------------------------------------------------------------ elevator hooks
@@ -210,10 +383,19 @@ export class Sim {
           t: -i * 0.35,
           dur: 1.1,
           then: () => {
+            if (c.id === BOSS_ID) {
+              c.mode = 'player';
+              c.act = null;
+              c.playerSpeed = 0;
+              this.onBossArrived?.(c);
+              return;
+            }
             c.mode = 'acting';
             c.act = null;
-            this.say(c, greeting(c.agent), 'say');
-            this.decide(c, Date.now(), false);
+            this.arrivals.unshift({ id: c.id, at: this.clock() });
+            this.arrivals.length = Math.min(this.arrivals.length, 8);
+            this.say(c, greeting(c.agent), 'idle');
+            this.decide(c, this.clock(), false);
           },
         };
       });
@@ -321,8 +503,7 @@ export class Sim {
     this.spotOwner.set(theirs.id, partner.id);
     const prop: Prop = kind === 'pingpong' ? 'paddle' : null;
     this.goTo(partner, { kind, spot: theirs, x: theirs.x, z: theirs.z, heading: theirs.heading, until, partner: c.id, prop: partner.act?.prop === 'cup' && kind === 'chat' ? 'cup' : prop }, false);
-    c.speaking = true;
-    partner.speaking = false;
+    this.startTalk(c, partner, kind, now);
     return { kind, spot: mine, x: mine.x, z: mine.z, heading: mine.heading, until, partner: partner.id, prop };
   }
 
@@ -340,8 +521,7 @@ export class Sim {
     this.seatOwner.set(mine.id, c.id);
     this.seatOwner.set(theirs.id, partner.id);
     this.goTo(partner, { kind: 'meeting', seat: theirs, x: theirs.x, z: theirs.z, heading: theirs.heading, until, partner: c.id, prop: null }, false);
-    c.speaking = true;
-    partner.speaking = false;
+    this.startTalk(c, partner, 'meeting', now);
     return { kind: 'meeting', seat: mine, x: mine.x, z: mine.z, heading: mine.heading, until, partner: partner.id, prop: null };
   }
 
@@ -368,9 +548,94 @@ export class Sim {
     this.releaseAll(c);
     const slotIndex = [...this.chars.values()].filter((o) => o !== c && isLeaving(o)).length;
     const q = this.elevator.queueSpot(slotIndex);
-    this.say(c, c.agent.kind === 'subagent' ? 'Done! Reporting back 👋' : 'Signing off 👋', 'say');
+    if (c.id !== BOSS_ID) this.say(c, c.agent.kind === 'subagent' ? 'Done! Reporting back 👋' : 'Signing off 👋', 'say');
     this.goTo(c, { kind: 'leave', x: q.x, z: q.z, heading: Math.PI, until: Infinity, prop: null }, false);
     void now;
+  }
+
+  // ------------------------------------------------------------------ conversations
+
+  private talkCtx(now: number): TalkCtx {
+    return { now, everyone: [...this.chars.values()].filter((c) => c.mode !== 'hidden' && c.id !== BOSS_ID).map((c) => c.agent), arrivals: this.arrivals };
+  }
+
+  private startTalk(a: Char, b: Char, where: Where, now: number) {
+    this.endTalk(a);
+    this.endTalk(b);
+    const key = `${a.id}|${b.id}`;
+    this.talks.set(key, { order: [a.id, b.id], where, topic: '', lines: [], i: 0, nextAt: now + 1500 });
+    a.talk = key;
+    b.talk = key;
+    a.speaking = false;
+    b.speaking = false;
+  }
+
+  private endTalk(c: Char) {
+    const key = c.talk;
+    if (!key) return;
+    const t = this.talks.get(key);
+    this.talks.delete(key);
+    for (const id of t?.order ?? []) {
+      const x = this.chars.get(id);
+      if (x && x.talk === key) {
+        x.talk = null;
+        x.speaking = false;
+      }
+    }
+    c.talk = null;
+    c.speaking = false;
+  }
+
+  /** Advances every conversation: one line at a time, with pauses between topics. */
+  private updateTalks(now: number) {
+    for (const [key, t] of this.talks) {
+      const a = this.chars.get(t.order[0]);
+      const b = this.chars.get(t.order[1]);
+      const together = (x: Char | undefined, y: Char | undefined) => {
+        const act = x?.act ?? x?.pending;
+        return Boolean(x && y && act && x.talk === key && act.partner === y.id && ['chat', 'meeting', 'pingpong'].includes(act.kind));
+      };
+      if (!a || !b || !together(a, b) || !together(b, a)) {
+        if (a) this.endTalk(a);
+        if (b) this.endTalk(b);
+        this.talks.delete(key);
+        continue;
+      }
+      // Only talk once both have arrived.
+      if (a.mode !== 'acting' || b.mode !== 'acting' || !a.act || !b.act) {
+        t.nextAt = Math.max(t.nextAt, now + 1200);
+        continue;
+      }
+      if (now < t.nextAt) continue;
+      if (t.i >= t.lines.length) {
+        const left = Math.min(a.act.until, b.act.until) - now;
+        if (left < 12_000) {
+          t.nextAt = now + 4000;
+          continue;
+        }
+        // A new topic; either of them may start it.
+        if (t.lines.length && Math.random() < 0.5) t.order = [t.order[1], t.order[0]];
+        const first = this.chars.get(t.order[0])!;
+        const second = this.chars.get(t.order[1])!;
+        const next = conversation(first.agent, second.agent, t.where, this.talkCtx(now), this.recentTopics);
+        if (!next) {
+          t.nextAt = now + 8000;
+          continue;
+        }
+        t.topic = next.topic;
+        t.lines = next.lines;
+        t.i = 0;
+        this.recentTopics = [next.topic, ...this.recentTopics.filter((x) => x !== next.topic)].slice(0, 6);
+      }
+      const line = t.lines[t.i++];
+      const speaker = this.chars.get(t.order[line.who])!;
+      const listener = this.chars.get(t.order[line.who === 0 ? 1 : 0])!;
+      const ms = 1700 + line.text.length * 55;
+      this.say(speaker, line.text, 'chat', ms + 900);
+      speaker.speaking = true;
+      listener.speaking = false;
+      t.nextAt = now + ms + (t.i >= t.lines.length ? 5000 + Math.random() * 6000 : 0);
+    }
   }
 
   // ------------------------------------------------------------------ reservations
@@ -396,6 +661,7 @@ export class Sim {
   }
 
   private releaseAll(c: Char) {
+    this.endTalk(c);
     for (const [k, v] of this.seatOwner) if (v === c.id) this.seatOwner.delete(k);
     for (const [k, v] of this.spotOwner) if (v === c.id) this.spotOwner.delete(k);
     if (c.act?.partner) {
@@ -427,6 +693,9 @@ export class Sim {
 
   update(dt: number, now: number) {
     const t = performance.now() / 1000;
+    this.updateTalks(now);
+    this.updateHandoffs(now);
+    this.updateBoss(now);
     for (const c of [...this.chars.values()]) {
       if (c.mode === 'hidden') continue;
       let poseName: PoseName = 'stand';
@@ -475,6 +744,12 @@ export class Sim {
         }
         c.walkPhase += dt * 8.5;
         if (!c.path.length) this.arrive(c, now);
+      } else if (c.mode === 'player') {
+        // Moved by the player controller.
+        c.y = FLOOR_Y;
+        const speed = c.playerSpeed ?? 0;
+        poseName = speed > 0.25 ? 'walk' : 'stand';
+        c.walkPhase += dt * speed * 4.1;
       } else if (c.mode === 'queue') {
         c.y = FLOOR_Y;
         turnToward(c, Math.PI, dt * 6);
@@ -482,7 +757,8 @@ export class Sim {
       } else if (c.mode === 'acting' && c.act) {
         c.y = FLOOR_Y;
         const a = c.act;
-        turnToward(c, a.heading, dt * 6);
+        const boss = c.faceBossUntil && c.faceBossUntil > now && !a.seat ? this.chars.get(BOSS_ID) : undefined;
+        turnToward(c, boss ? Math.atan2(boss.x - c.x, boss.z - c.z) : a.heading, dt * 6);
         seatHeight = a.seat?.height ?? 0.47;
         poseName = this.actPose(c, a, now, t);
         if (now > a.until) this.finish(c, now);
@@ -519,11 +795,29 @@ export class Sim {
     c.act = act;
     c.mode = 'acting';
     c.person.setProp(act.prop);
-    if (act.kind === 'chat' || act.kind === 'pingpong' || act.kind === 'meeting') c.nextSwap = now + 3000;
+    if (act.kind === 'visit' && c.visit) {
+      // The hand-off itself: a few words each, then back to work.
+      const b = this.chars.get(c.visit.to);
+      const project = c.visit.project ?? c.agent.projectName ?? 'this';
+      this.say(c, b ? `${b.agent.persona}, here is my work on ${project}. Can you take it from here?` : `Here is my work on ${project}.`, 'chat', 5200);
+      act.until = now + 9000;
+      if (b) {
+        const reply = b;
+        setTimeout(() => {
+          if (this.chars.get(reply.id) === reply) this.say(reply, `Got it, ${c.agent.persona}. On it 👍`, 'chat', 4200);
+        }, 3800);
+      }
+    }
   }
 
   private finish(c: Char, now: number) {
     const a = c.act!;
+    // Let a conversation finish its current topic before splitting up.
+    const talk = c.talk ? this.talks.get(c.talk) : undefined;
+    if (talk && talk.lines.length && talk.i < talk.lines.length && now - a.until < 30_000) {
+      a.until = now + 3000;
+      return;
+    }
     if (a.kind === 'brew') {
       // Coffee ready: drink it on a sofa or at a standing table.
       this.spotOwner.delete(a.spot!.id);
@@ -535,6 +829,7 @@ export class Sim {
       c.person.setProp('cup');
       return;
     }
+    c.visit = undefined;
     if (c.agent.status === 'idle') this.leisure(c, now, false);
     else this.decide(c, now, false);
   }
@@ -557,27 +852,16 @@ export class Sim {
       case 'sofa':
         return a.seat?.kind === 'beanbag' ? 'lounge' : a.prop === 'phone' ? 'sitPhone' : 'lounge';
       case 'chat': {
-        if (now > c.nextSwap) {
-          c.speaking = !c.speaking;
-          c.nextSwap = now + 3500 + Math.random() * 3000;
-          if (c.speaking) this.say(c, chatLine(c, this.chars.get(a.partner ?? '')), 'say');
-        }
-        if (a.prop === 'cup') return c.speaking ? 'talk' : 'drink';
-        return c.speaking ? 'talk' : 'listen';
+        const talking = c.speaking && Boolean(c.bubble);
+        if (a.prop === 'cup') return talking ? 'talk' : 'drink';
+        return talking ? 'talk' : 'listen';
       }
       case 'meeting':
-        if (now > c.nextSwap) {
-          c.speaking = !c.speaking;
-          c.nextSwap = now + 4000 + Math.random() * 3000;
-          if (c.speaking) this.say(c, chatLine(c, this.chars.get(a.partner ?? '')), 'say');
-        }
-        return c.speaking ? 'sitTalk' : 'sit';
+        return c.speaking && c.bubble ? 'sitTalk' : 'sit';
       case 'pingpong':
-        if (now > c.nextSwap) {
-          c.nextSwap = now + 9000 + Math.random() * 8000;
-          if (Math.random() > 0.5) this.say(c, PINGPONG[Math.floor(Math.random() * PINGPONG.length)], 'say');
-        }
         return 'pingpong';
+      case 'visit':
+        return c.bubble ? 'talk' : 'listen';
       case 'arcade':
         return 'arcade';
       case 'window':
@@ -593,21 +877,83 @@ export class Sim {
 
   // ------------------------------------------------------------------ bubbles
 
-  private say(c: Char, text: string, kind: Bubble['kind']) {
-    c.bubble = { text, kind, until: performance.now() + Math.min(8000, 3000 + text.length * 50) };
-    this.onChatter?.(c, kind, text);
-    c.nextBubbleAt = Date.now() + 6000;
+  /** Shows a bubble. Repeats of a question the user already saw stay out of the chat feed. */
+  private say(c: Char, text: string, kind: Bubble['kind'], ms?: number, feed = true) {
+    c.bubble = { text, kind, until: performance.now() + (ms ?? Math.min(8000, 3000 + text.length * 50)) };
+    if (feed) this.onChatter?.(c, kind, text);
+    c.nextBubbleAt = this.clock() + 6000;
   }
 
   private bubbles(c: Char, now: number) {
     if (c.bubble && c.bubble.until < performance.now()) c.bubble = null;
+    if (c.id === BOSS_ID) return;
     if (c.bubble || now < c.nextBubbleAt || c.mode === 'riding' || c.mode === 'hidden') return;
     const active = [...this.chars.values()].filter((o) => o.bubble).length;
     const priority = c.id === this.selectedId || c.id === this.hoverId;
-    c.nextBubbleAt = now + (c.agent.status === 'working' ? 6000 : 10_000) + Math.random() * 9000;
-    if (active >= 7 && !priority) return;
-    const line = pickLine(c);
-    if (line) this.say(c, line.text, line.kind);
+    const status = c.agent.status;
+    c.nextBubbleAt = now + (status === 'working' ? 7000 + Math.random() * 8000 : status === 'waiting' ? 12_000 + Math.random() * 6000 : 22_000 + Math.random() * 20_000);
+    if (active >= 7 && !priority && status !== 'waiting') return;
+    const line = this.pickLine(c, now);
+    if (line) this.say(c, line.text, line.kind, undefined, line.feed ?? true);
+  }
+
+  /**
+   * What a character says next on his own. Real lines from the session are said once each; a finished
+   * worker says his final words once, then only makes small talk.
+   */
+  private pickLine(c: Char, now: number): { text: string; kind: Bubble['kind']; feed?: boolean } | null {
+    const a = c.agent;
+    if (a.status === 'waiting') {
+      const reason = a.attention?.reason ?? 'I need you for a second!';
+      const fresh = reason !== c.lastAsk;
+      c.lastAsk = reason;
+      return { text: reason, kind: 'ask', feed: fresh };
+    }
+    c.lastAsk = '';
+    const unsaid = a.lines.filter((l) => !c.said.has(lineKey(l)) && now - l.at < 15 * 60_000);
+    if (a.status === 'working') {
+      // Keep up with the session: older unsaid lines are skipped, the two newest are said in order.
+      for (const l of unsaid.slice(0, -2)) c.said.add(lineKey(l));
+      const l = unsaid.slice(-2)[0];
+      if (l) {
+        c.said.add(lineKey(l));
+        return { text: l.text, kind: l.kind };
+      }
+      if (a.activity && a.activity !== c.lastActivity) {
+        c.lastActivity = a.activity;
+        return { text: a.activity, kind: 'action' };
+      }
+      if (Math.random() < 0.45) {
+        const t = this.freshNpc(c, now, () => workThought(a, c.npcSaid));
+        if (t) return { text: t, kind: 'idle' };
+      }
+      return null;
+    }
+    if (a.status !== 'idle') return null;
+    if (unsaid.length) {
+      // The job just finished: its final words, once.
+      for (const l of unsaid) c.said.add(lineKey(l));
+      const last = unsaid.filter((l) => l.kind === 'say' || l.kind === 'ask').at(-1);
+      if (last) return { text: last.text, kind: 'say' };
+    }
+    if (c.talk) return null;
+    const t = this.freshNpc(c, now, () => idleLine(a, this.talkCtx(now), c.npcSaid));
+    return t ? { text: t, kind: 'idle' } : null;
+  }
+
+  /** A small-talk line nobody in the office said in the last ten minutes. */
+  private freshNpc(c: Char, now: number, make: () => string | null): string | null {
+    for (let i = 0; i < 4; i++) {
+      const t = make();
+      if (!t) return null;
+      c.npcSaid.add(t);
+      const at = this.recentNpc.get(t);
+      if (at !== undefined && now - at < 10 * 60_000) continue;
+      this.recentNpc.set(t, now);
+      if (this.recentNpc.size > 300) for (const [k, v] of this.recentNpc) if (now - v > 10 * 60_000) this.recentNpc.delete(k);
+      return t;
+    }
+    return null;
   }
 
   /** Where a character's label should float (world). */
@@ -661,32 +1007,8 @@ function greeting(a: AgentSnapshot): string {
   return a.status === 'working' ? `Morning! On my way to ${a.projectName ?? 'work'} 💼` : 'Hello everyone 👋';
 }
 
-function chatLine(c: Char, partner: Char | undefined): string {
-  const r = Math.random();
-  if (partner && r < 0.45) {
-    const opener = CHAT_OPENERS[Math.floor(Math.random() * CHAT_OPENERS.length)];
-    return opener.replace('{p}', partner.agent.persona).replace('{project}', partner.agent.projectName ?? 'your project');
-  }
-  const say = c.agent.lines.filter((l) => l.kind === 'say').slice(-4);
-  if (say.length && r < 0.8) return say[Math.floor(Math.random() * say.length)].text;
-  return CHAT_REPLIES[Math.floor(Math.random() * CHAT_REPLIES.length)];
-}
-
-function pickLine(c: Char): { text: string; kind: Bubble['kind'] } | null {
-  const a = c.agent;
-  const r = Math.random();
-  if (a.status === 'waiting') return { text: a.attention?.reason ?? 'I need you for a second!', kind: 'ask' };
-  if (a.status === 'idle') {
-    if (c.act?.kind === 'chat' || c.act?.kind === 'pingpong' || c.act?.kind === 'meeting') return null;
-    if (r < 0.5) return { text: IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)], kind: 'idle' };
-    const say = a.lines.filter((l) => l.kind === 'say' || l.kind === 'ask').at(-1);
-    return say ? { text: say.text, kind: say.kind === 'ask' ? 'ask' : 'say' } : null;
-  }
-  if (a.status !== 'working') return null;
-  const fresh = a.lines.filter((l) => Date.now() - l.at < 15 * 60_000).slice(-6);
-  if (r < 0.35 || !fresh.length) return { text: a.activity, kind: 'action' };
-  const line = fresh[Math.floor(Math.random() * fresh.length)];
-  return { text: line.text, kind: line.kind };
+function lineKey(l: { at: number; text: string }): string {
+  return `${l.at}|${l.text}`;
 }
 
 export { BOTTOM };

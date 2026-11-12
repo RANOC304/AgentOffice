@@ -184,6 +184,11 @@ export class Person {
     } else {
       torsoParts.push(part(new THREE.TorusGeometry(0.058, 0.012, 6, 18), mix(L.shirt, '#000000', 0.2), 0, 0.535, 0.01, Math.PI / 2 - 0.1));
     }
+    if (L.tie) {
+      torsoParts.push(part(new RoundedBoxGeometry(0.05, 0.042, 0.024, 2, 0.01), L.tie, 0, 0.5, 0.118));
+      torsoParts.push(part(new THREE.BoxGeometry(0.052, 0.27, 0.014), L.tie, 0, 0.34, 0.13, 0, 0, 0, 1, 1, 1));
+      torsoParts.push(part(new THREE.ConeGeometry(0.037, 0.05, 4), L.tie, 0, 0.19, 0.13, Math.PI, Math.PI / 4, 0, 1, 1, 0.4));
+    }
     if (L.badge) {
       torsoParts.push(part(new THREE.BoxGeometry(0.012, 0.22, 0.008), '#f2f0ea', 0.04, 0.41, 0.123, 0, 0, -0.2));
       torsoParts.push(part(new THREE.BoxGeometry(0.012, 0.22, 0.008), '#f2f0ea', -0.04, 0.41, 0.123, 0, 0, 0.2));
@@ -304,6 +309,11 @@ export class Person {
     this.hit.position.y = 0.9;
     this.root.add(this.hit);
     this.apply();
+  }
+
+  /** Hides the head (first-person view, so the camera does not look out from inside it). */
+  setHeadVisible(on: boolean) {
+    this.head.visible = on;
   }
 
   setProp(prop: Prop) {

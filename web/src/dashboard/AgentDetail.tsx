@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { PROVIDER_META, ROOM_BY_ID } from '../../../shared/rooms.ts';
 import { act } from '../api.ts';
-import type { ActivityKind, AgentSnapshot } from '../../../shared/types.ts';
+import type { ActivityKind, AgentSnapshot, OfficeSnapshot } from '../../../shared/types.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { ago, childrenOf, clock, compact, duration, shortModel, STATUS_ICON, STATUS_LABEL } from '../format.ts';
+import { AgentControls } from './AgentControls.tsx';
 import { AgentCard } from './AgentList.tsx';
+import type { MissionPreset } from './MissionForm.tsx';
 import { HBars, Sparkline } from './charts.tsx';
 
 const KIND_ICON: Record<ActivityKind, string> = {
@@ -26,13 +28,17 @@ const KIND_ICON: Record<ActivityKind, string> = {
 export function AgentDetail({
   agent,
   agents,
+  snapshot,
   onSelect,
   demo,
+  onHandoff,
 }: {
   agent: AgentSnapshot;
   agents: AgentSnapshot[];
+  snapshot: OfficeSnapshot | null;
   onSelect: (id: string | null, focus?: boolean) => void;
   demo: boolean;
+  onHandoff: (preset: MissionPreset) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(agent.persona);
@@ -121,6 +127,7 @@ The real session is not touched; he comes back if you give that session a new ta
           <p className="detail-session">{agent.kind === 'subagent' ? '↳ ' : ''}{agent.name}</p>
           <p className="detail-sub">
             <span className="swatch" style={{ background: meta.color }} /> {meta.label} · {agent.app}
+            {agent.host && ` · 🖥 ${agent.host}`}
             {agent.model && ` · ${shortModel(agent.model)}`}
           </p>
           <p className="detail-sub">
@@ -136,6 +143,8 @@ The real session is not touched; he comes back if you give that session a new ta
         </button>
         {error && <span className="attn attn-warn">{error}</span>}
       </div>
+
+      <AgentControls agent={agent} snapshot={snapshot} demo={demo} onHandoff={onHandoff} />
 
       <div className={`now now-${agent.status}`}>
         <span className={`pill pill-${agent.status}`}>

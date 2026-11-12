@@ -6,10 +6,14 @@ import { AgentDetail } from './AgentDetail.tsx';
 import { AgentList } from './AgentList.tsx';
 import { Analytics } from './Analytics.tsx';
 import { Feed } from './Feed.tsx';
-import { Names } from './Names.tsx';
+import type { MissionPreset } from './MissionForm.tsx';
+import { Missions } from './Missions.tsx';
 import { Projects } from './Projects.tsx';
+import { Settings } from './Settings.tsx';
+import { Standup } from './Standup.tsx';
+import { UsagePanel, worstGauge } from './Usage.tsx';
 
-type Tab = 'agents' | 'projects' | 'analytics' | 'feed' | 'names';
+type Tab = 'agents' | 'missions' | 'projects' | 'analytics' | 'standup' | 'feed' | 'settings';
 
 interface Props {
   snapshot: OfficeSnapshot | null;
@@ -23,9 +27,16 @@ interface Props {
 
 export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNeo, detailRequest }: Props) {
   const [tab, setTab] = useState<Tab>('agents');
+  const [preset, setPreset] = useState<MissionPreset | null>(null);
   useEffect(() => {
     if (detailRequest) setTab('agents');
   }, [detailRequest]);
+  const demo = connection === 'demo';
+  const handoff = (p: MissionPreset) => {
+    setPreset(p);
+    setTab('missions');
+  };
+  const limit = worstGauge(snapshot?.usage);
   const agents = snapshot?.agents ?? [];
   const selected = agents.find((a) => a.id === selectedId) ?? null;
 
@@ -41,12 +52,15 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNe
     ];
   }, [agents]);
 
+  const running = snapshot?.missions.filter((m) => m.status === 'running' || m.status === 'todo').length ?? 0;
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: 'agents', label: 'Agents', count: agents.length },
+    { id: 'missions', label: 'Missions', count: running || undefined },
     { id: 'projects', label: 'Projects', count: snapshot?.projects.length },
-    { id: 'analytics', label: 'Analytics' },
+    { id: 'analytics', label: 'Usage' },
+    { id: 'standup', label: 'Standup' },
     { id: 'feed', label: 'Feed' },
-    { id: 'names', label: 'Names' },
+    { id: 'settings', label: 'Settings' },
   ];
 
   return (
@@ -60,13 +74,18 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNe
             <h1>AgentOffice</h1>
             <p className="sub">
               <span className={`conn conn-${connection}`} aria-hidden="true" />
-              {connection === 'live' && `Live · ${snapshot?.host ?? 'this PC'} · read-only`}
+              {connection === 'live' && `Live · ${snapshot?.host ?? 'this PC'}${snapshot?.peers.list.some((p) => p.online) ? ` + ${snapshot.peers.list.filter((p) => p.online).map((p) => p.host).join(', ')}` : ''}`}
               {connection === 'connecting' && 'Connecting to the local server…'}
               {connection === 'offline' && 'Server offline · retrying'}
               {connection === 'demo' && 'Demo data · not your sessions'}
             </p>
           </div>
         </div>
+        {limit && (
+          <button type="button" className={`limit-chip ${limit.usedPercent >= 95 ? 'alert' : 'warn'}`} onClick={() => setTab('analytics')} title="Plan usage">
+            ⚠ {limit.plan} {limit.label.toLowerCase()} {Math.round(limit.usedPercent)}%
+          </button>
+        )}
       </header>
 
       <section className="kpis" aria-label="Office summary">
@@ -104,14 +123,23 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNe
       <div className="dash-body" role="tabpanel">
         {tab === 'agents' &&
           (selected ? (
-            <AgentDetail agent={selected} agents={agents} onSelect={onSelect} demo={connection === 'demo'} />
+            <AgentDetail agent={selected} agents={agents} snapshot={snapshot} onSelect={onSelect} demo={demo} onHandoff={handoff} />
           ) : (
             <AgentList agents={agents} selectedId={selectedId} onSelect={onSelect} sources={snapshot?.sources ?? []} fired={snapshot?.fired ?? []} />
           ))}
-        {tab === 'projects' && <Projects projects={snapshot?.projects ?? []} removed={snapshot?.removedProjects ?? []} agents={agents} onSelect={onSelect} demo={connection === 'demo'} />}
-        {tab === 'analytics' && snapshot && <Analytics snapshot={snapshot} />}
+        {tab === 'missions' && snapshot && <Missions snapshot={snapshot} onSelect={onSelect} demo={demo} preset={preset} onPresetUsed={() => setPreset(null)} />}
+        {tab === 'projects' && (
+          <Projects projects={snapshot?.projects ?? []} removed={snapshot?.removedProjects ?? []} pins={snapshot?.pins ?? []} agents={agents} onSelect={onSelect} demo={demo} />
+        )}
+        {tab === 'analytics' && snapshot && (
+          <>
+            <UsagePanel usage={snapshot.usage} />
+            <Analytics snapshot={snapshot} />
+          </>
+        )}
+        {tab === 'standup' && <Standup demo={demo} />}
         {tab === 'feed' && <Feed agents={agents} onSelect={onSelect} />}
-        {tab === 'names' && <Names agents={agents} demo={connection === 'demo'} />}
+        {tab === 'settings' && <Settings snapshot={snapshot} agents={agents} demo={demo} />}
       </div>
     </aside>
   );

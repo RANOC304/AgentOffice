@@ -113,6 +113,86 @@ export interface AgentSnapshot {
   attention?: Attention;
   /** Activity timestamps (ms) in the analytics window, for timelines. */
   pulses: number[];
+  /** Computer the session runs on, when it is not this one (remote peer). */
+  host?: string;
+  /** What the office can do with this session (missions, replies, stop, open in app). */
+  controls?: AgentControls;
+}
+
+/** Where "Open" can take you for a session. */
+export type OpenTarget = 'claude-app' | 'codex-app' | 'terminal' | 'folder';
+
+export interface AgentControls {
+  /** Mission run by AgentOffice for this session, if any. */
+  missionId?: string;
+  /**
+   * How to reply: 'resume' continues the session headlessly from the office; 'app' means the session
+   * is open live somewhere else, so the reply is copied and the app is opened instead.
+   */
+  reply: 'resume' | 'app' | null;
+  /** The office can stop it: a mission process or a Claude Code terminal session. */
+  canStop: boolean;
+  open: OpenTarget[];
+}
+
+export type MissionStatus = 'todo' | 'running' | 'done' | 'failed' | 'stopped';
+/** read-only: look but do not touch; edit: change files in the project; full: no guard rails. */
+export type MissionPermission = 'read-only' | 'edit' | 'full';
+export type MissionProvider = 'claude-code' | 'codex';
+
+/** A task on the mission board, optionally launched as a headless Claude Code / Codex run. */
+export interface Mission {
+  id: string;
+  title: string;
+  prompt: string;
+  projectPath: string;
+  projectName: string;
+  provider: MissionProvider;
+  permission: MissionPermission;
+  model?: string;
+  status: MissionStatus;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  /** Session the mission runs in (new, or an existing one it continues). */
+  sessionId?: string;
+  agentId?: string;
+  /** Continues an existing session instead of starting a new one. */
+  resume?: boolean;
+  /** Hand-off: the worker whose result this mission builds on. */
+  from?: { agentId: string; persona: string };
+  /** Short final answer of the run. */
+  result?: string;
+  error?: string;
+  costUsd?: number;
+  runs: number;
+}
+
+export interface UsageGauge {
+  id: string;
+  label: string;
+  usedPercent: number;
+  /** When the window resets (ms), if known. */
+  resetsAt?: number;
+  /** When the value was measured (ms). */
+  at: number;
+}
+
+export interface UsageInfo {
+  claude: UsageGauge[];
+  codex: UsageGauge[];
+  /** Tokens used today by the workers in the office, per provider. */
+  tokensToday: Partial<Record<Provider, number>>;
+  /** Cost reported by today's missions, in USD. */
+  missionCostUsd: number;
+}
+
+/** Another computer that shares its agents through the peers folder. */
+export interface PeerStatus {
+  host: string;
+  online: boolean;
+  updatedAt: number;
+  agents: number;
 }
 
 /** One BrowserOS neo tab an agent opened. */
@@ -192,4 +272,12 @@ export interface OfficeSnapshot {
   removedProjects: Array<{ path: string; name: string; removedAt: number }>;
   /** Analytics window in ms (timeline length). */
   windowMs: number;
+  missions: Mission[];
+  usage: UsageInfo;
+  /** Remote computers feeding this office. */
+  peers: { dir?: string; list: PeerStatus[] };
+  /** Projects pinned to a room by the user. */
+  pins: Array<{ path: string; room: RoomId }>;
+  /** Which command-line tools AgentOffice found for missions. */
+  launchers: { 'claude-code': boolean; codex: boolean };
 }

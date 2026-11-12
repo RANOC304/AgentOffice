@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ROOM_BY_ID, type RoomId } from '../shared/rooms.ts';
 
 const FILE = path.join(fileURLToPath(new URL('..', import.meta.url)), 'data', 'office-state.json');
 const KEEP_MS = 14 * 24 * 3600_000;
@@ -11,6 +12,7 @@ const KEEP_MS = 14 * 24 * 3600_000;
 interface Saved {
   fired?: Record<string, { at: number; persona?: string; name?: string; provider?: string }>;
   removedProjects?: Record<string, { at: number; path: string } | number>;
+  pins?: Record<string, { path: string; room: RoomId }>;
 }
 
 export interface FiredEntry {
@@ -24,6 +26,8 @@ export class OfficeState {
   readonly fired = new Map<string, FiredEntry>();
   /** Lower-cased project path → when it was removed from the office, and its original spelling. */
   readonly removedProjects = new Map<string, { at: number; path: string }>();
+  /** Lower-cased project path → the room its workers sit in. */
+  readonly pins = new Map<string, { path: string; room: RoomId }>();
 
   constructor() {
     try {
@@ -33,6 +37,7 @@ export class OfficeState {
         if (typeof v === 'number') this.removedProjects.set(p, { at: v, path: p });
         else if (v && typeof v.at === 'number') this.removedProjects.set(p, { at: v.at, path: v.path ?? p });
       }
+      for (const [p, v] of Object.entries(saved.pins ?? {})) if (v && v.room in ROOM_BY_ID) this.pins.set(p, { path: v.path ?? p, room: v.room });
     } catch {
       // first run
     }
@@ -56,9 +61,15 @@ export class OfficeState {
     if (this.removedProjects.delete(projectPath.toLowerCase())) this.save(now);
   }
 
+  pin(projectPath: string, room: RoomId | null) {
+    if (room) this.pins.set(projectPath.toLowerCase(), { path: projectPath, room });
+    else this.pins.delete(projectPath.toLowerCase());
+    this.save();
+  }
+
   save(now = Date.now()) {
     for (const [id, f] of this.fired) if (now - f.at > KEEP_MS) this.fired.delete(id);
-    const data: Saved = { fired: Object.fromEntries(this.fired), removedProjects: Object.fromEntries(this.removedProjects) };
+    const data: Saved = { fired: Object.fromEntries(this.fired), removedProjects: Object.fromEntries(this.removedProjects), pins: Object.fromEntries(this.pins) };
     try {
       fs.mkdirSync(path.dirname(FILE), { recursive: true });
       fs.writeFileSync(FILE, JSON.stringify(data, null, 1), 'utf8');
