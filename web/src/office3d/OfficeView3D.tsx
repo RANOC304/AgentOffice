@@ -96,7 +96,7 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
   const toggleFree = () => sceneRef.current?.setMode(mode === 'free' ? 'orbit' : 'free');
   const startTour = () => sceneRef.current?.setMode(mode === 'tour' ? 'orbit' : 'tour');
 
-  // Keyboard shortcuts: C free camera, F full screen, I idle tour.
+  // Keyboard shortcuts: C free camera, F full screen, I starts the idle tour.
   const modeRef = useRef(mode);
   modeRef.current = mode;
   useEffect(() => {
@@ -105,6 +105,11 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const key = e.key.toLowerCase();
+      // The idle tour only stops from its button, so shortcuts leave it alone.
+      if (modeRef.current === 'tour') {
+        if (key === 'f') toggleFullscreen();
+        return;
+      }
       if (key === 'c') sceneRef.current?.setMode(modeRef.current === 'free' ? 'orbit' : 'free');
       else if (key === 'f') toggleFullscreen();
       else if (key === 'i') sceneRef.current?.setMode('tour');
@@ -119,13 +124,13 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
       {error && <div className="office-loading">3D view unavailable: {error}</div>}
       {mode === 'free' && (
         <div className="freecam-hud">
-          Free camera · <kbd>W</kbd>
-          <kbd>A</kbd>
+          Free camera · <kbd>Z</kbd>
+          <kbd>Q</kbd>
           <kbd>S</kbd>
-          <kbd>D</kbd> move · <kbd>Q</kbd>/<kbd>E</kbd> down/up · <kbd>Shift</kbd> faster · drag to look · <kbd>Esc</kbd> exit
+          <kbd>D</kbd> move · <kbd>A</kbd>/<kbd>E</kbd> down/up · <kbd>Shift</kbd> faster · drag to look · <kbd>Esc</kbd> exit
         </div>
       )}
-      {mode === 'tour' && <div className="freecam-hud">Idle tour · move the mouse over the office to take back control</div>}
+      {mode === 'tour' && <div className="freecam-hud">Idle tour · click Idle tour again to stop it</div>}
       <div className="office-controls" role="toolbar" aria-label="Office view controls">
         {mode === 'orbit' && (
           <>
@@ -143,10 +148,10 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
             </button>
           </>
         )}
-        <button type="button" className={mode === 'free' ? 'on' : ''} aria-pressed={mode === 'free'} onClick={toggleFree} title="Fly freely with W A S D and the mouse (C)">
+        <button type="button" className={mode === 'free' ? 'on' : ''} aria-pressed={mode === 'free'} onClick={toggleFree} title="Fly freely with Z Q S D and the mouse (C)">
           Free cam
         </button>
-        <button type="button" className={mode === 'tour' ? 'on' : ''} aria-pressed={mode === 'tour'} onClick={startTour} title="Idle tour: the camera visits the rooms and the workers (I)">
+        <button type="button" className={mode === 'tour' ? 'on' : ''} aria-pressed={mode === 'tour'} onClick={startTour} title="Idle tour: the camera visits the rooms and the workers. Click again to stop.">
           Idle tour
         </button>
         <button

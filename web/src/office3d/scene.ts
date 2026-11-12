@@ -240,20 +240,7 @@ export class OfficeScene {
       },
       { passive: false },
     );
-    // Moving the mouse over the office ends the idle tour.
-    let tourStart: { x: number; y: number } | null = null;
-    const onMove = (e: PointerEvent) => {
-      if (this.mode !== 'tour') {
-        tourStart = null;
-        return;
-      }
-      tourStart ??= { x: e.clientX, y: e.clientY };
-      if (Math.hypot(e.clientX - tourStart.x, e.clientY - tourStart.y) > 4) {
-        tourStart = null;
-        this.setMode('orbit');
-      }
-    };
-    container.addEventListener('pointermove', onMove);
+    // The idle tour only ends from its button, so the mouse can be moved freely while it runs.
     const onInput = () => (this.lastInput = performance.now());
     const onKeyDown = (e: KeyboardEvent) => {
       onInput();
@@ -272,7 +259,6 @@ export class OfficeScene {
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     this.cleanup.push(() => {
-      container.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointermove', onInput);
       window.removeEventListener('pointerdown', onInput);
       window.removeEventListener('wheel', onInput);
@@ -343,7 +329,11 @@ export class OfficeScene {
       this.freeFly.lookAt(head);
       return;
     }
-    if (this.mode === 'tour') this.setMode('orbit');
+    if (this.mode === 'tour') {
+      // The tour keeps running and swings over to this worker next.
+      this.tour.visit(id);
+      return;
+    }
     const target = new THREE.Vector3(c.x, c.y + 1, c.z);
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
     this.animateTo(target, target.clone().add(dir.multiplyScalar(17)));

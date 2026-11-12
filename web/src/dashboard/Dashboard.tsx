@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { OfficeSnapshot } from '../../../shared/types.ts';
 import type { Connection } from '../useOffice.ts';
 import { compact } from '../format.ts';
@@ -17,10 +17,15 @@ interface Props {
   selectedId: string | null;
   onSelect: (id: string | null, focus?: boolean) => void;
   onOpenNeo: () => void;
+  /** Bumped when an agent is clicked in the office: show the Agents tab with his details. */
+  detailRequest: number;
 }
 
-export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNeo }: Props) {
+export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNeo, detailRequest }: Props) {
   const [tab, setTab] = useState<Tab>('agents');
+  useEffect(() => {
+    if (detailRequest) setTab('agents');
+  }, [detailRequest]);
   const agents = snapshot?.agents ?? [];
   const selected = agents.find((a) => a.id === selectedId) ?? null;
 

@@ -37,10 +37,10 @@ Then open http://127.0.0.1:5173. Add `?demo` to either URL for a busy office wit
 ## Camera and controls
 
 - **Orbit** (default): drag to rotate, right-drag to pan, scroll to zoom toward the cursor, double-click to reset, **Follow** keeps the camera on the selected worker.
-- **Free cam** (`C`): fly anywhere with `W` `A` `S` `D`, `Q`/`E` down/up, `Shift` to go faster, drag to look around, scroll to move forward. `Esc` leaves it.
-- **Idle tour** (`I`): the camera glides around the office forever, visiting random rooms and each worker in turn. Moving the mouse over the office stops it. With **Auto idle** on, it starts by itself after 3 minutes without any input.
+- **Free cam** (`C`): fly anywhere with `Z` `Q` `S` `D` (AZERTY), `A`/`E` down/up, `Shift` to go faster, drag to look around, scroll to move forward. Arrow keys work too. `Esc` leaves it.
+- **Idle tour** (`I`): the camera glides around the office forever, visiting random rooms and each worker in turn. It only stops when you click **Idle tour** again; clicking a worker meanwhile makes the camera visit him. With **Auto idle** on, it starts by itself after 3 minutes without any input.
 - **Full screen** (`F`): the office fills the screen; the dashboard comes back when you leave it.
-- Click a character or a card to select him. Click the **BrowserOS neo wall screen** (or the dashboard's *In Neo · tabs* tile) to browse every tab the agents opened, with Neo's screenshots.
+- Click a character (or his name tag) to see his details; the dashboard reopens if it was hidden. Click the **BrowserOS neo wall screen** (or the dashboard's *In Neo · tabs* tile) to browse every tab the agents opened, with Neo's screenshots.
 
 The office keeps running smoothly when its window is not in front: a background worker clock keeps the simulation and drawing going when the browser slows animation frames, the resolution adapts to the machine's load, and after a full pause everything catches up instantly.
 

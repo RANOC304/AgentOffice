@@ -13,11 +13,23 @@ export function App() {
   const [focus, setFocus] = useState<{ id: string; at: number } | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [neoView, setNeoView] = useState<{ session: string | null } | null>(null);
+  const [detailRequest, setDetailRequest] = useState(0);
 
   const select = useCallback((id: string | null, focusCamera = false) => {
     setSelectedId(id);
     if (id && focusCamera) setFocus({ id, at: Date.now() });
   }, []);
+
+  /** Clicking someone in the office shows his details, reopening the dashboard if it was hidden. */
+  const openAgent = useCallback(
+    (id: string | null, focusCamera = false) => {
+      select(id, focusCamera);
+      if (!id) return;
+      setPanelOpen(true);
+      setDetailRequest((n) => n + 1);
+    },
+    [select],
+  );
 
   // Drop the selection once its agent has left the office.
   useEffect(() => {
@@ -59,7 +71,7 @@ export function App() {
           agents={snapshot ? snapshot.agents : null}
           neoPages={snapshot?.neoPages ?? NO_PAGES}
           selectedId={selectedId}
-          onSelect={(id) => select(id)}
+          onSelect={(id) => openAgent(id)}
           onScreen={(session) => setNeoView({ session })}
           focusRequest={focus}
         />
@@ -67,7 +79,7 @@ export function App() {
           {panelOpen ? 'Hide dashboard ›' : '‹ Dashboard'}
         </button>
       </main>
-      {panelOpen && <Dashboard snapshot={snapshot} connection={connection} selectedId={selectedId} onSelect={select} onOpenNeo={() => setNeoView({ session: null })} />}
+      {panelOpen && <Dashboard snapshot={snapshot} connection={connection} selectedId={selectedId} onSelect={select} onOpenNeo={() => setNeoView({ session: null })} detailRequest={detailRequest} />}
       {neoView && (
         <NeoViewer
           pages={snapshot?.neoPages ?? NO_PAGES}
@@ -76,7 +88,7 @@ export function App() {
           onClose={() => setNeoView(null)}
           onSelectAgent={(id) => {
             setNeoView(null);
-            select(id, true);
+            openAgent(id, true);
           }}
         />
       )}

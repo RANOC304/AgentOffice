@@ -1,11 +1,11 @@
-// Two extra camera modes: a free-flying camera (WASD + drag to look) and the idle tour, which glides
+// Two extra camera modes: a free-flying camera (ZQSD + drag to look) and the idle tour, which glides
 // around the office forever, visiting random rooms and then each worker in turn.
 
 import * as THREE from 'three';
 import type { RoomId } from '../../../shared/rooms.ts';
 import type { Elevator } from './elevator.ts';
 import { D, ELEVATOR, type Layout, W } from './layout.ts';
-import type { Sim } from './sim.ts';
+import type { Char, Sim } from './sim.ts';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -53,12 +53,13 @@ export class FreeFly {
     const fwd = this.forward();
     const right = new THREE.Vector3().crossVectors(fwd, UP).normalize();
     const move = new THREE.Vector3();
-    if (k.has('w') || k.has('arrowup')) move.add(fwd);
+    // ZQSD layout (AZERTY): Z forward, S back, Q left, D right, E up, A down.
+    if (k.has('z') || k.has('arrowup')) move.add(fwd);
     if (k.has('s') || k.has('arrowdown')) move.sub(fwd);
     if (k.has('d') || k.has('arrowright')) move.add(right);
-    if (k.has('a') || k.has('arrowleft')) move.sub(right);
+    if (k.has('q') || k.has('arrowleft')) move.sub(right);
     if (k.has('e') || k.has(' ')) move.y += 1;
-    if (k.has('q') || k.has('control')) move.y -= 1;
+    if (k.has('a') || k.has('control')) move.y -= 1;
     if (move.lengthSq() > 0) this.camera.position.addScaledVector(move.normalize(), speed);
     const p = this.camera.position;
     p.x = THREE.MathUtils.clamp(p.x, -120, W + 120);
@@ -96,6 +97,7 @@ export class Tour {
   readonly pos = new THREE.Vector3();
   readonly target = new THREE.Vector3();
   focusId: string | null = null;
+  private pending: string | null = null;
 
   constructor(camera: THREE.PerspectiveCamera, sim: Sim, layout: Layout, elevator: Elevator) {
     this.camera = camera;
@@ -111,8 +113,34 @@ export class Tour {
     this.next();
   }
 
+  /** Swings over to this worker now, then carries on touring. */
+  visit(id: string) {
+    this.pending = id;
+    if (this.shot) this.elapsed = this.shot.hold;
+  }
+
+  private workerShot(c: Char): Shot {
+    return {
+      kind: 'worker',
+      target: new THREE.Vector3(c.x, c.y + 1.2, c.z),
+      radius: 6.5,
+      elevation: 0.42,
+      angle: c.heading + (Math.random() > 0.5 ? 0.55 : -0.55),
+      spin: Math.random() > 0.5 ? 0.05 : -0.05,
+      hold: 9,
+      charId: c.id,
+    };
+  }
+
   private next() {
     this.elapsed = 0;
+    const chosen = this.pending ? this.sim.chars.get(this.pending) : undefined;
+    this.pending = null;
+    if (chosen) {
+      this.shot = this.workerShot(chosen);
+      this.focusId = chosen.id;
+      return;
+    }
     const s = this.step++;
     const workers = [...this.sim.chars.values()].filter((c) => c.person.root.visible && c.mode !== 'riding' && c.mode !== 'hidden');
     if (this.elevator.status !== 'idle' && Math.random() < 0.5 && s % 3 === 1) {
@@ -127,16 +155,7 @@ export class Tour {
     }
     if (s % 2 === 1 && workers.length) {
       const c = workers[this.workerCursor++ % workers.length];
-      this.shot = {
-        kind: 'worker',
-        target: new THREE.Vector3(c.x, c.y + 1.2, c.z),
-        radius: 6.5,
-        elevation: 0.42,
-        angle: c.heading + (Math.random() > 0.5 ? 0.55 : -0.55),
-        spin: Math.random() > 0.5 ? 0.05 : -0.05,
-        hold: 9,
-        charId: c.id,
-      };
+      this.shot = this.workerShot(c);
       this.focusId = c.id;
       return;
     }
