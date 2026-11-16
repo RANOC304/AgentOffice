@@ -93,6 +93,14 @@ To see the agents of another computer (even on another network), share a folder 
    It reads that computer's sessions with the same collectors and writes a small redacted summary (no transcripts, no screenshots) into the folder every 10 seconds.
 2. On this computer, set the same synced folder in **Settings → Other computers** (or `AGENTOFFICE_PEERS_DIR`).
 
+**Always on (Linux):** to keep sharing without a terminal open, install a systemd user service on the other computer. It starts at every login and restarts if it stops:
+
+```bash
+npm run peer:install -- --dir "/home/you/Sync/AgentOffice"   # add --boot to start before login, --name "Laptop" to rename it
+npm run peer:status
+npm run peer:uninstall
+```
+
 Remote workers appear with their computer's name on their tag; a computer that stops writing for 3 minutes goes offline and its workers leave. AgentOffice itself still opens no network connection: the sync tool moves the file.
 
 ## Data sources

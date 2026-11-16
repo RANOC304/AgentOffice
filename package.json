@@ -15,7 +15,10 @@
     "serve": "node --disable-warning=ExperimentalWarning server/index.ts",
     "check": "tsc -p tsconfig.json",
     "snapshot": "node --disable-warning=ExperimentalWarning server/index.ts --once",
-    "peer": "node --disable-warning=ExperimentalWarning server/peer.ts"
+    "peer": "node --disable-warning=ExperimentalWarning server/peer.ts",
+    "peer:install": "node scripts/peer-service.mjs install",
+    "peer:status": "node scripts/peer-service.mjs status",
+    "peer:uninstall": "node scripts/peer-service.mjs uninstall"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "^5.3.0",

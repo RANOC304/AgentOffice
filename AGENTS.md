@@ -31,7 +31,7 @@ AgentOffice is a private, local-only web app that shows the owner's AI agents an
 - `npm start` – build the UI and serve everything at http://127.0.0.1:4317.
 - `npm run check` – TypeScript type-check (must pass before committing).
 - `npm run snapshot` – print what the collectors currently see.
-- `npm run peer -- --dir "<synced folder>"` – peer mode for another computer: writes its agents into the shared folder.
+- `npm run peer -- --dir "<synced folder>"` – peer mode for another computer: writes its agents into the shared folder. On Linux, `npm run peer:install -- --dir "<synced folder>"` runs it as a systemd user service at login (`peer:status`, `peer:uninstall`; `scripts/peer-service.mjs`).
 - Add `?demo` to the URL for synthetic agents.
 
 ### Architecture
