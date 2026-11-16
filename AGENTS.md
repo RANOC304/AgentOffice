@@ -2,7 +2,7 @@
 
 ## Shared instructions
 
-Read and follow the shared instructions at C:/Users/aubin/.codex/AGENTS.md. Apply global rules and folder scopes matching this repository's actual absolute path.
+Read and follow the shared instructions at C:/Users/aubin/.codex/AGENTS.md on Windows, or /home/aubin/.codex/AGENTS.md on Linux. Apply global rules and folder scopes matching this repository's actual absolute path.
 
 ## Assigned author
 
