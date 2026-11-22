@@ -124,7 +124,7 @@ npm run peer:uninstall
 
 The sync tool must run on **both** computers. If a computer stops sharing, or the shared folder cannot be read, the dashboard shows an amber warning under its title (click it to open Settings). On Windows, keep the sync tool's data folder outside `AppData` if you start it from an app that redirects `AppData`.
 
-Remote workers appear with their computer's name on their tag; a computer that stops writing for 3 minutes goes offline and its workers leave. AgentOffice itself still opens no network connection: the sync tool moves the file.
+Remote workers appear with their computer's name on their tag; a computer that stops writing for 6 minutes goes offline and its workers leave. If a computer keeps flickering offline, Syncthing is retrying after a failed pull: `npm run peer:setup` on that computer makes it notice changes after 1 second, and on the main computer you can lower the folder's *puller pause* (`pullerPauseS`) to 5 seconds. AgentOffice itself still opens no network connection: the sync tool moves the file.
 
 ## Data sources
 

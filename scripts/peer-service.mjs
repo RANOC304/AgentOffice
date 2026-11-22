@@ -164,6 +164,18 @@ function pair(mainId, dir) {
   console.log('  syncthing: main computer added and the folder shared with it');
 }
 
+/**
+ * The peer rewrites its file every minute. If Syncthing needs a few seconds to notice a rewrite, the other
+ * computer asks for the old copy, gets "no such file" and waits minutes before retrying, so the computer
+ * flickers offline. Noticing changes after 1 second shrinks that window to almost nothing. Best effort.
+ */
+function tuneFolder() {
+  if (waitForSyncthing() === null) return;
+  const r = run('syncthing', ['cli', 'config', 'folders', FOLDER_ID, 'fs-watcher-delay-s', 'set', '1']);
+  if (r.status === 0) console.log('  syncthing: changes in the shared folder are noticed after 1 second');
+  else if (!/no such folder|not found/i.test(`${r.stderr}${r.stdout}`)) console.warn(`  could not shorten the change-detection delay: ${(r.stderr || r.stdout).trim()}`);
+}
+
 function setup() {
   const { dir, name } = target();
   const mainId = option('--main-id');
@@ -178,6 +190,7 @@ function setup() {
   enableLinger();
   installSyncthing();
   if (mainId) pair(mainId, dir);
+  tuneFolder();
   const id = ownDeviceId();
   console.log('\nDone. Both services now start at boot and restart by themselves.');
   if (id) console.log(`This computer's Syncthing ID: ${id}`);

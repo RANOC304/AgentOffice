@@ -11,8 +11,8 @@ import { PROVIDER_META, ROOM_BY_ID } from '../shared/rooms.ts';
 import type { AgentSnapshot, NeoPage, PeerStatus } from '../shared/types.ts';
 
 const SETTINGS = path.join(fileURLToPath(new URL('..', import.meta.url)), 'data', 'settings.json');
-/** A peer that has not written for this long is offline and its agents leave. */
-export const PEER_STALE_MS = 3 * 60_000;
+/** A peer that has not written for this long is offline and its agents leave. Long enough to ride out a Syncthing retry. */
+export const PEER_STALE_MS = 6 * 60_000;
 const MAX_FILE = 4 * 1024 * 1024;
 
 export interface PeerFile {
