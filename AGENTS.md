@@ -53,6 +53,12 @@ AgentOffice is a private, local-only web app that shows the owner's AI agents an
 - `web/src/audio/` – `engine.ts` (Web Audio context, buses, settings, positional panners), `music.ts` (generative lo-fi), `voice.ts` (local text-to-speech and babble voices; never use online voices), `officeSound.ts` (elevator, steps, typing, coffee, ping-pong, ambience, hits, character voices).
 - `web/src/dashboard/` – React side panel (agents with controls, missions, projects, usage + analytics, standup, feed, settings with alerts, other computers and names). `web/src/alerts.ts` (notifications and chime), `web/src/replay.ts` (rebuilds the office at a past moment).
 
+### Assets
+
+- Assets path: None
+- Keep: False
+- Asset kinds: all
+
 ## Assigned skills
 
 Only shared skills from C:/Users/aubin/.agents/skills may be assigned here. Read relevant assigned skills before use. Leave this list empty until skills are assigned.
