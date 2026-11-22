@@ -29,7 +29,7 @@ Then open http://127.0.0.1:5173. Add `?demo` to either URL for a busy office wit
 | Elevator atrium (centre) | Every agent arrives from below the island and leaves the same way |
 | Café, Meeting Room, Game Lounge | Idle agents: coffee, conversations, ping-pong, arcade, sofas, the window view |
 
-- **Characters** are all men. Clothes show the type: Claude Code orange, Codex blue, Claude chat gold, ChatGPT teal. Subagents wear a cap and a lanyard badge; selecting one shows his parent session.
+- **Characters** are all men, modelled in detail: faces with eyes that blink, eyebrows, nose, ears and a mouth that moves while they talk, hands with fingers, shaped torsos, belts and shoes. They turn their heads toward whoever they talk to. Clothes show the type: Claude Code orange, Codex blue, Claude chat gold, ChatGPT teal. Subagents wear a cap and a lanyard badge; selecting one shows his parent session.
 - **Names** come from `config/names.txt` (or **Settings → Character names** in the dashboard). A new agent gets a name nobody is using; when every name is taken, a new male name is invented. A name is freed 30 minutes after its agent leaves.
 - **Needs you**: an agent blocked on a question or an approval stands up and waves under a bouncing `!`. The browser tab title shows how many are waiting.
 - **Day and night** follow your clock: dusk colours in the evening, lamps and lit screens at night.
@@ -43,13 +43,32 @@ What characters say: a session's real messages are said **once** each. When a jo
 
 - **Orbit** (default): drag to rotate, right-drag to pan, scroll to zoom exactly where the cursor points (the point under the cursor stays put, all the way up to a desk, a wall or a character, stopping just before it), double-click to reset, **Follow** keeps the camera on the selected worker. **Drag: camera / office** switches the drag direction (camera moves the way you drag; office drags the office like a map).
 - **Replay**: scrub back through the day (play at ×1 to ×300), with the chat feed and the lighting of that time. **Back to live** returns to now.
-- **Free cam** (`C`): fly anywhere with `Z` `Q` `S` `D` (AZERTY), `A`/`E` down/up, `Shift` to go faster, drag to look around, scroll to move forward. Arrow keys work too. `Esc` leaves it.
+- **Free cam** (`C`): fly anywhere with `Z` `Q` `S` `D` (AZERTY), `A`/`E` down/up, `Shift` to go faster, right click to hide the cursor and look with the mouse (or drag), scroll to move forward. Arrow keys work too. `Esc` leaves it.
 - **Idle tour** (`I`): the camera glides around the office forever, visiting random rooms and each worker in turn. It only stops when you click **Idle tour** again; clicking a worker meanwhile makes the camera visit him. With **Auto idle** on, it starts by itself after 3 minutes without any input.
-- **Be the boss** (👔): you ride the elevator up from below the island and walk around the office like in a game. `Z` `Q` `S` `D` walk (`W`/`A` and the arrows work too), `Shift` runs, the mouse turns your head (click the office to capture the mouse, `Esc` frees it; dragging also works). Choose **FPV** (through your eyes) or **TPV** (the camera follows you over your shoulder, scroll to change the distance), or press `V`. Workers talk to you when you come close: news about their work, their question if they are waiting for you, small talk when idle. `E` or a click talks to the worker in front of you and opens his details. **Leave office** walks you back to the elevator.
+- **Be the boss** (👔): you ride the elevator up from below the island and walk around the office like in a game. Everything is on the keyboard and the toolbar hides while you play:
+  - `Z` `Q` `S` `D` walk (`W`/`A` and the arrows work too); `Shift` or a double tap on `Z` sprints, with a wider view; `Space` jumps (about 1.75 m high). If you ever get lost or wedged between furniture, the **↺ Back to the elevator** button (bottom left, the only button in boss mode) puts you back in front of the elevator; you also slide out of tight spots between chairs and desks by walking away.
+  - **Right click** (and only right click) hides or shows the cursor: hidden, the mouse turns your head. Dragging also looks around while the cursor is visible.
+  - `V` switches first person (FPV) and third person (TPV, over your shoulder; scroll changes the distance).
+  - `E` talks to the worker in front of you (or the nearest one) and opens his page in the dashboard.
+  - `C` sits on the nearest chair, sofa, bench or beanbag, or on the floor anywhere; walking stands you up.
+  - Just for fun, `R` slaps the worker in front of you (you step in, your hand sweeps across at face height and his head snaps aside) and `F` kicks him: he falls on his back, lies there dazed, gets up and goes back to what he was doing. Nothing about the real sessions changes. Right click never attacks: it only shows or hides the cursor.
+  - `T` opens or closes the dashboard, `M` turns the sound on or off and `L` leaves: you walk back to the elevator and ride down. (Full screen is on `F` outside boss mode only, since `F` kicks here.)
+  - Workers talk to you when you come close: news about their work, their question if they are waiting for you, small talk when idle.
 - **Full screen** (`F`): the office fills the screen; the dashboard comes back when you leave it.
+- **Dashboard** (`T`): opens or closes the side panel anywhere in the app, except while you type in a field. It floats over the right side of the office, so opening or closing it never resizes the 3D view.
 - Click a character (or his name tag) to see his details; the dashboard reopens if it was hidden. Click the **BrowserOS neo wall screen** (or the dashboard's *In Neo · tabs* tile) to browse every tab the agents opened, with Neo's screenshots.
 
 The office keeps running smoothly when its window is not in front: a background worker clock keeps the simulation and drawing going when the browser slows animation frames, the resolution adapts to the machine's load, and after a full pause everything catches up instantly.
+
+## Music, sounds and voices
+
+Everything is synthesised in the browser (no audio files, nothing downloaded) and starts after your first click:
+
+- **Music**: generative lo-fi (electric piano chords, bass, a swung beat, a little melody, vinyl crackle) that changes every few bars; a calm ambient pad late at night.
+- **Sounds**, placed in 3D around the camera: the elevator hum, doors and bell, footsteps, keyboards, the coffee machine, ping-pong, wind, birds by day and crickets at night, and the slaps and kicks.
+- **Voices**: every character has his own voice. Close to the camera (or to you in boss mode) characters read their lines aloud with this computer's own text-to-speech voices; further away they babble. Online voices are never used, so the text stays on the computer.
+
+The 🔊 button in the office toolbar has the volumes (all, music, sounds, voices) and the voice style (speak nearby, babble only, silent). Characters stay quiet while the office is in a background tab.
 
 ## Managing the office
 
@@ -93,13 +112,17 @@ To see the agents of another computer (even on another network), share a folder 
    It reads that computer's sessions with the same collectors and writes a small redacted summary (no transcripts, no screenshots) into the folder every 10 seconds.
 2. On this computer, set the same synced folder in **Settings → Other computers** (or `AGENTOFFICE_PEERS_DIR`).
 
-**Always on (Linux):** to keep sharing without a terminal open, install a systemd user service on the other computer. It starts at every login and restarts if it stops:
+**Always on (Linux), one command:** run this once on the other computer. It installs the peer and Syncthing as systemd user services that start at boot, restart whenever they stop and survive Node upgrades, and it pairs the folder with your main computer (use that computer's Syncthing device ID, shown in its Syncthing page under Actions → Show ID):
 
 ```bash
-npm run peer:install -- --dir "/home/you/Sync/AgentOffice"   # add --boot to start before login, --name "Laptop" to rename it
-npm run peer:status
+npm run peer:setup -- --dir "$HOME/AgentOffice-sync" --main-id <device ID of the main computer>
+npm run peer:status      # is everything running, and is the shared file fresh?
 npm run peer:uninstall
 ```
+
+`--name "Laptop"` renames the computer in the office. `npm run peer:install` sets up only the peer service (no Syncthing). Re-running `peer:setup` is safe.
+
+The sync tool must run on **both** computers. If a computer stops sharing, or the shared folder cannot be read, the dashboard shows an amber warning under its title (click it to open Settings). On Windows, keep the sync tool's data folder outside `AppData` if you start it from an app that redirects `AppData`.
 
 Remote workers appear with their computer's name on their tag; a computer that stops writing for 3 minutes goes offline and its workers leave. AgentOffice itself still opens no network connection: the sync tool moves the file.
 

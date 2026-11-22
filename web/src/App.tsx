@@ -50,6 +50,12 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setSelectedId(null);
+      // T opens and closes the dashboard (except while typing in a field).
+      if ((e.key === 't' || e.key === 'T') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat) {
+        const el = e.target as HTMLElement | null;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+        setPanelOpen((open) => !open);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -157,7 +163,7 @@ export function App() {
             ))}
           </div>
         )}
-        <button type="button" className="panel-toggle" onClick={() => setPanelOpen((o) => !o)} aria-expanded={panelOpen}>
+        <button type="button" className="panel-toggle" onClick={() => setPanelOpen((o) => !o)} aria-expanded={panelOpen} title="Open or close the dashboard (T)">
           {panelOpen ? 'Hide dashboard ›' : '‹ Dashboard'}
         </button>
       </main>

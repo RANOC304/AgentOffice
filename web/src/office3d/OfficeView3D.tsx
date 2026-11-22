@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AgentSnapshot, Mission, NeoPage } from '../../../shared/types.ts';
 import { ChatFeed, type ChatFeedHandle } from './ChatFeed.tsx';
+import { SoundPanel } from './SoundPanel.tsx';
 import type { BossView } from './player.ts';
 import { type BossState, type CameraMode, OfficeScene, type TagMode } from './scene.ts';
 
@@ -76,9 +77,8 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
       return 'tpv';
     }
   });
-  const chooseView = (v: BossView) => {
+  const rememberView = (v: BossView) => {
     setBossView(v);
-    sceneRef.current?.setBossView(v);
     try {
       localStorage.setItem('agentoffice.bossView', v);
     } catch {
@@ -101,7 +101,7 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
           onChatter: (line) => chatRef.current?.chatter(line),
           onBoss: (state) => {
             setBoss(state);
-            if (state) setBossView(state.view);
+            if (state) rememberView(state.view);
           },
         });
         sceneRef.current = scene;
@@ -183,11 +183,8 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const key = e.key.toLowerCase();
-      // Boss mode uses the keyboard to walk; only full screen stays on F.
-      if (modeRef.current === 'boss') {
-        if (key === 'f') toggleFullscreen();
-        return;
-      }
+      // Boss mode uses the keyboard for everything (F is the kick there).
+      if (modeRef.current === 'boss') return;
       // The idle tour only stops from its button, so shortcuts leave it alone.
       if (modeRef.current === 'tour') {
         if (key === 'f') toggleFullscreen();
@@ -211,7 +208,7 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
           Free camera · <kbd>Z</kbd>
           <kbd>Q</kbd>
           <kbd>S</kbd>
-          <kbd>D</kbd> move · <kbd>A</kbd>/<kbd>E</kbd> down/up · <kbd>Shift</kbd> faster · drag to look · <kbd>Esc</kbd> exit
+          <kbd>D</kbd> move · <kbd>A</kbd>/<kbd>E</kbd> down/up · <kbd>Shift</kbd> faster · right click: mouse look on/off (or drag) · <kbd>Esc</kbd> exit
         </div>
       )}
       {mode === 'tour' && <div className="freecam-hud">Idle tour · click Idle tour again to stop it</div>}
@@ -224,13 +221,21 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
               👔 Boss · <kbd>Z</kbd>
               <kbd>Q</kbd>
               <kbd>S</kbd>
-              <kbd>D</kbd> walk · <kbd>Shift</kbd> run · {boss.locked ? 'mouse turns your head · Esc frees the mouse' : 'click the office to look around with the mouse'} · <kbd>V</kbd>{' '}
-              {bossView === 'fpv' ? 'third person' : 'first person'} · <kbd>E</kbd> or click: talk to a worker{bossView === 'tpv' ? ' · scroll: camera distance' : ''}
+              <kbd>D</kbd> walk ·  <kbd>Shift</kbd>/double <kbd>Z</kbd> sprint · <kbd>Space</kbd> jump · <kbd>E</kbd> talk + his page · <kbd>R</kbd> slap · <kbd>F</kbd> kick · <kbd>C</kbd> {boss.sitting ? 'stand up' : 'sit'} · <kbd>V</kbd>{' '}
+              {bossView === 'fpv' ? 'third person' : 'first person'} · right click: {boss.locked ? 'show the cursor' : 'mouse look'} · <kbd>T</kbd> dashboard · <kbd>M</kbd> sound · <kbd>L</kbd> leave
             </>
           )}
         </div>
       )}
       {mode === 'boss' && bossView === 'fpv' && boss?.arrived && <div className="crosshair" aria-hidden="true" />}
+      {mode === 'boss' && (
+        <div className="office-controls" role="toolbar" aria-label="Boss controls">
+          <button type="button" disabled={!boss?.arrived} onClick={() => sceneRef.current?.resetBoss()} title="Back in front of the elevator, if you are lost or stuck">
+            ↺ Back to the elevator
+          </button>
+        </div>
+      )}
+      {mode !== 'boss' && (
       <div className="office-controls" role="toolbar" aria-label="Office view controls">
         {mode === 'orbit' && (
           <>
@@ -256,25 +261,14 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
             </button>
           </>
         )}
-        {mode === 'boss' ? (
-          <>
-            <div className="seg" role="group" aria-label="View">
-              <button type="button" className={bossView === 'fpv' ? 'on' : ''} aria-pressed={bossView === 'fpv'} onClick={() => chooseView('fpv')} title="First person: see through your eyes (V)">
-                FPV
-              </button>
-              <button type="button" className={bossView === 'tpv' ? 'on' : ''} aria-pressed={bossView === 'tpv'} onClick={() => chooseView('tpv')} title="Third person: the camera follows you (V)">
-                TPV
-              </button>
-            </div>
-            <button type="button" className="on" onClick={() => sceneRef.current?.setMode('orbit')} title="Walk back to the elevator and get the normal camera back">
-              Leave office
-            </button>
-          </>
-        ) : (
-          <button type="button" className="boss-btn" onClick={() => sceneRef.current?.spawnBoss(bossView)} title="Become the boss: ride the elevator up and walk around the office">
-            👔 Be the boss
-          </button>
-        )}
+        <button
+          type="button"
+          className="boss-btn"
+          onClick={() => sceneRef.current?.spawnBoss(bossView)}
+          title="Become the boss: ride the elevator up and walk around the office (everything is on the keyboard; L leaves)"
+        >
+          👔 Be the boss
+        </button>
         <button type="button" className={mode === 'free' ? 'on' : ''} aria-pressed={mode === 'free'} onClick={toggleFree} title="Fly freely with Z Q S D and the mouse (C)">
           Free cam
         </button>
@@ -296,10 +290,12 @@ export function OfficeView3D({ agents, neoPages, selectedId, onSelect, onScreen,
         <button type="button" className={replaying ? 'on' : ''} aria-pressed={replaying} onClick={onReplay} title="Replay the day: scrub back through the office and its chat">
           {replaying ? 'Live' : 'Replay'}
         </button>
+        <SoundPanel />
         <button type="button" className={fullscreen ? 'on' : ''} aria-pressed={fullscreen} onClick={toggleFullscreen} title="Full screen (F)">
           {fullscreen ? 'Exit full screen' : 'Full screen'}
         </button>
       </div>
+      )}
       {mode === 'orbit' && <p className="office-hint">Drag to rotate · right-drag to pan · scroll zooms where the cursor points · click someone or the Neo screen</p>}
     </div>
   );

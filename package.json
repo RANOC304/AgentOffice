@@ -16,6 +16,7 @@
     "check": "tsc -p tsconfig.json",
     "snapshot": "node --disable-warning=ExperimentalWarning server/index.ts --once",
     "peer": "node --disable-warning=ExperimentalWarning server/peer.ts",
+    "peer:setup": "node scripts/peer-service.mjs setup",
     "peer:install": "node scripts/peer-service.mjs install",
     "peer:status": "node scripts/peer-service.mjs status",
     "peer:uninstall": "node scripts/peer-service.mjs uninstall"

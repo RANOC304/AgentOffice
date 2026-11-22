@@ -5,12 +5,15 @@
 import type { RoomId } from '../../../shared/rooms.ts';
 import type { AgentSnapshot } from '../../../shared/types.ts';
 import { BOTTOM, type Elevator } from './elevator.ts';
-import { cellCenter, ELEVATOR, type Layout, type Seat, type Spot } from './layout.ts';
+import { cellCenter, ELEVATOR, type Layout, navIndex, type Seat, type Spot } from './layout.ts';
 import { BOSS_LOOK, hash, type Look, lookFor } from './look.ts';
 import type { Nav, P } from './nav.ts';
 import { Person, type Prop } from './person.ts';
 import { pose, type PoseName } from './poses.ts';
-import { bossLine, conversation, idleLine, type Line, type TalkCtx, type Where, workThought } from './talk.ts';
+import { bossLine, bystanderLine, conversation, idleLine, type Line, reactionLine, type TalkCtx, type Where, workThought } from './talk.ts';
+
+/** Sounds the office makes, for the audio engine. */
+export type SimSound = 'slap' | 'kick' | 'whoosh' | 'ouch' | 'ding' | 'land';
 
 /** You, when you walk around the office. */
 export const BOSS_ID = 'boss';
@@ -89,6 +92,18 @@ export interface Char {
   metBoss?: boolean;
   /** Turn toward the boss until then (standing workers). */
   faceBossUntil?: number;
+  /** Boss mode: sitting on a seat, or on the floor. */
+  sitting?: { seat?: Seat; floor: boolean };
+  /** The mouth moves until then (ms, office clock). */
+  talkUntil?: number;
+  /** Slapped or kicked by the boss: reaction pose and knockback. */
+  hit?: { kind: 'slap' | 'kick'; at: number; until: number; vx: number; vz: number; seated: boolean };
+  /** The boss's own slap or kick animation. */
+  bossAction?: { kind: 'slap' | 'kick'; at: number; dur: number };
+  /** A quick step toward the target, so the hand or foot actually reaches him. */
+  lunge?: { fx: number; fz: number; tx: number; tz: number; at: number; dur: number };
+  /** Boss mode: height of the current jump above the floor. */
+  jumpY?: number;
 }
 
 export class Sim {
@@ -119,6 +134,10 @@ export class Sim {
   /** Called when the boss steps out of the elevator and can be controlled. */
   onBossArrived?: (c: Char) => void;
   private bossTalkAt = 0;
+  private pendingHits: Array<{ target: string; kind: 'slap' | 'kick'; at: number }> = [];
+  private pendingLines: Array<{ id: string; at: number; text: string }> = [];
+  /** Called for one-shot sounds at a position. */
+  onSound?: (name: SimSound, x: number, y: number, z: number, from?: Char) => void;
   /** Called whenever a character says or thinks something in a bubble. */
   onChatter?: (c: Char, kind: Bubble['kind'], text: string) => void;
 
@@ -226,7 +245,9 @@ export class Sim {
   spawnBoss(): Char {
     const old = this.chars.get(BOSS_ID);
     if (old) {
-      this.elevator.cancel(BOSS_ID);
+      // The previous you may still be riding down: take him out of that trip, or the elevator
+      // would remove the new you when it reaches the bottom.
+      this.elevator.evict(BOSS_ID);
       this.destroy(old);
     }
     const now = this.clock();
@@ -260,6 +281,7 @@ export class Sim {
   leaveBoss() {
     const c = this.chars.get(BOSS_ID);
     if (!c) return;
+    this.bossStand();
     if (c.mode === 'player') {
       c.playerSpeed = 0;
       this.leave(c, this.clock());
@@ -269,6 +291,201 @@ export class Sim {
       this.elevator.cancel(BOSS_ID);
       this.destroy(c);
     }
+  }
+
+  /**
+   * You sit down: on the nearest free chair, sofa, bench or beanbag within reach, or on the floor
+   * right where you are. Returns what you sat on.
+   */
+  bossSit(): 'seat' | 'floor' | null {
+    const c = this.chars.get(BOSS_ID);
+    if (!c || c.mode !== 'player') return null;
+    if (c.sitting) return c.sitting.floor ? 'floor' : 'seat';
+    let best: Seat | undefined;
+    let bestD = 1.9;
+    for (const s of this.layout.seats) {
+      const owner = this.seatOwner.get(s.id);
+      if (owner && owner !== BOSS_ID) continue;
+      const d = Math.hypot(s.x - c.x, s.z - c.z);
+      if (d < bestD) {
+        best = s;
+        bestD = d;
+      }
+    }
+    c.playerSpeed = 0;
+    if (best) {
+      this.seatOwner.set(best.id, BOSS_ID);
+      c.x = best.x;
+      c.z = best.z;
+      c.heading = best.heading;
+      c.sitting = { seat: best, floor: false };
+      return 'seat';
+    }
+    c.sitting = { floor: true };
+    return 'floor';
+  }
+
+  /** Back on your feet in front of the elevator, facing the office. */
+  resetBoss(): boolean {
+    const c = this.chars.get(BOSS_ID);
+    if (!c || c.mode !== 'player') return false;
+    this.bossStand();
+    const spot = this.elevator.exitSpot(4);
+    c.x = spot.x;
+    c.z = spot.z;
+    c.heading = 0;
+    c.jumpY = 0;
+    c.lunge = undefined;
+    c.playerSpeed = 0;
+    return true;
+  }
+
+  /** You stand up again, a step in front of the seat if it sits inside furniture. */
+  bossStand() {
+    const c = this.chars.get(BOSS_ID);
+    if (!c?.sitting) return;
+    const seat = c.sitting.seat;
+    c.sitting = undefined;
+    if (!seat) return;
+    if (this.seatOwner.get(seat.id) === BOSS_ID) this.seatOwner.delete(seat.id);
+    const p = cellCenter(this.nav.nearestFree(seat.x + Math.sin(seat.heading) * 0.45, seat.z + Math.cos(seat.heading) * 0.45));
+    c.x = p.x;
+    c.z = p.z;
+  }
+
+  /**
+   * Just for fun: the boss slaps or kicks the worker in front of him. Only the 3D characters react
+   * (a pose, a little knockback and a comic line); nothing about the real sessions changes.
+   */
+  bossAttack(kind: 'slap' | 'kick', aimYaw: number): boolean {
+    const boss = this.chars.get(BOSS_ID);
+    if (!boss || boss.mode !== 'player') return false;
+    const now = this.clock();
+    if (boss.bossAction && now - boss.bossAction.at < boss.bossAction.dur) return false;
+    if (boss.sitting) this.bossStand();
+    const reach = kind === 'slap' ? 1.4 : 1.7;
+    let target: Char | undefined;
+    let best = reach;
+    for (const c of this.chars.values()) {
+      if (c === boss || c.mode === 'hidden' || c.mode === 'riding' || c.mode === 'stepping' || c.mode === 'queue') continue;
+      const dx = c.x - boss.x;
+      const dz = c.z - boss.z;
+      const d = Math.hypot(dx, dz);
+      if (d > best) continue;
+      // In front of where you look, or of where your body faces (third person).
+      const off = (yaw: number) => {
+        let diff = Math.atan2(dx, dz) - yaw;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        return Math.abs(diff);
+      };
+      if (Math.min(off(aimYaw), off(boss.heading)) > 1.15) continue;
+      target = c;
+      best = d;
+    }
+    if (target) {
+      boss.heading = Math.atan2(target.x - boss.x, target.z - boss.z);
+      // Step in to arm's (or leg's) length.
+      const want = kind === 'slap' ? 0.6 : 0.78;
+      const d = Math.hypot(target.x - boss.x, target.z - boss.z);
+      if (d > want + 0.04) {
+        // Walk the line toward him in small steps and stop at the last free spot (desks and chairs
+        // may be in the way), never closer than arm's length.
+        const ux = (target.x - boss.x) / d;
+        const uz = (target.z - boss.z) / d;
+        let tx = boss.x;
+        let tz = boss.z;
+        for (let step = 0.05; step <= d - want; step += 0.05) {
+          const px = boss.x + ux * step;
+          const pz = boss.z + uz * step;
+          if (!this.nav.free(navIndex(px, pz))) break;
+          tx = px;
+          tz = pz;
+        }
+        if (tx !== boss.x || tz !== boss.z) boss.lunge = { fx: boss.x, fz: boss.z, tx, tz, at: now, dur: kind === 'slap' ? 150 : 200 };
+      }
+    }
+    boss.bossAction = { kind, at: now, dur: kind === 'slap' ? 440 : 620 };
+    this.onSound?.('whoosh', boss.x, 1.2, boss.z);
+    // The hit lands when the hand (or foot) is right in front of him.
+    if (target) this.pendingHits.push({ target: target.id, kind, at: now + (kind === 'slap' ? 190 : 270) });
+    return Boolean(target);
+  }
+
+  private applyHit(c: Char, kind: 'slap' | 'kick', boss: Char, now: number) {
+    // A kick knocks anyone off his feet, even off his chair; a slap leaves sitters seated.
+    const seated = kind === 'slap' && c.mode === 'acting' && Boolean(c.act?.seat);
+    const dx = c.x - boss.x;
+    const dz = c.z - boss.z;
+    const d = Math.max(0.01, Math.hypot(dx, dz));
+    const speed = seated ? 0 : kind === 'slap' ? 0.9 : 3.6;
+    // He faces the boss, so a kick sends him onto his back, away from him.
+    if (kind === 'kick' || !seated) c.heading = Math.atan2(-dx, -dz);
+    c.hit = { kind, at: now, until: now + (kind === 'slap' ? 1500 : 3200), vx: (dx / d) * speed, vz: (dz / d) * speed, seated };
+    c.faceBossUntil = now + 4000;
+    this.onSound?.(kind, c.x, kind === 'slap' ? 1.55 : 1.0, c.z, c);
+    this.onSound?.('ouch', c.x, 1.6, c.z, c);
+    this.pendingLines.push({ id: c.id, at: now + 380, text: reactionLine(kind, seated, c.npcSaid) });
+    // Somebody nearby may comment.
+    const witness = [...this.chars.values()].find(
+      (o) => o !== c && o !== boss && o.mode !== 'hidden' && o.mode !== 'riding' && Math.hypot(o.x - c.x, o.z - c.z) < 5 && Math.random() < 0.4,
+    );
+    if (witness) this.pendingLines.push({ id: witness.id, at: now + 1300, text: bystanderLine(witness.npcSaid) });
+  }
+
+  /** After a knockback: walk back to where he was going. */
+  private recover(c: Char) {
+    if (c.mode === 'walking' && c.pending) {
+      c.path = this.nav.path({ x: c.x, z: c.z }, { x: c.pending.x, z: c.pending.z });
+      return;
+    }
+    const act = c.act;
+    if ((c.mode === 'acting' || c.mode === 'queue') && act && Math.hypot(act.x - c.x, act.z - c.z) > 0.15) {
+      c.act = null;
+      c.pending = act;
+      c.mode = 'walking';
+      c.path = this.nav.path({ x: c.x, z: c.z }, { x: act.x, z: act.z });
+    }
+  }
+
+  private updateFun(now: number) {
+    const boss = this.chars.get(BOSS_ID);
+    for (let i = this.pendingHits.length - 1; i >= 0; i--) {
+      const h = this.pendingHits[i];
+      if (now < h.at) continue;
+      this.pendingHits.splice(i, 1);
+      const c = this.chars.get(h.target);
+      if (c && boss && c.mode !== 'hidden' && c.mode !== 'riding') this.applyHit(c, h.kind, boss, now);
+    }
+    for (let i = this.pendingLines.length - 1; i >= 0; i--) {
+      const l = this.pendingLines[i];
+      if (now < l.at) continue;
+      this.pendingLines.splice(i, 1);
+      const c = this.chars.get(l.id);
+      if (!c) continue;
+      c.npcSaid.add(l.text);
+      this.say(c, l.text, 'chat', Math.min(6000, 2600 + l.text.length * 50));
+    }
+  }
+
+  /** Where a character turns his head: his conversation partner, or the boss when he is close. */
+  private lookTarget(c: Char, now: number): { yaw: number; pitch: number } {
+    let target: Char | undefined;
+    const partner = c.act?.partner ?? c.pending?.partner;
+    if (partner && (c.act?.kind === 'chat' || c.act?.kind === 'meeting' || c.act?.kind === 'pingpong' || c.act?.kind === 'visit')) target = this.chars.get(partner);
+    const boss = c.id !== BOSS_ID ? this.chars.get(BOSS_ID) : undefined;
+    if (boss && boss.mode === 'player') {
+      const d = Math.hypot(boss.x - c.x, boss.z - c.z);
+      if (d < 2.2 || ((c.faceBossUntil ?? 0) > now && d < 5)) target = boss;
+    }
+    if (!target || target.mode === 'hidden') return { yaw: 0, pitch: 0 };
+    let yaw = Math.atan2(target.x - c.x, target.z - c.z) - c.heading;
+    while (yaw > Math.PI) yaw -= Math.PI * 2;
+    while (yaw < -Math.PI) yaw += Math.PI * 2;
+    if (Math.abs(yaw) > 2.2) return { yaw: 0, pitch: 0 };
+    const dist = Math.max(0.4, Math.hypot(target.x - c.x, target.z - c.z));
+    const rise = target.y + target.person.topY - (c.y + c.person.topY);
+    return { yaw: Math.max(-1, Math.min(1, yaw)), pitch: Math.max(-0.35, Math.min(0.35, -Math.atan2(rise, dist))) };
   }
 
   /** The worker nearest to the boss (within reach) says something to him right away. */
@@ -696,12 +913,31 @@ export class Sim {
     this.updateTalks(now);
     this.updateHandoffs(now);
     this.updateBoss(now);
+    this.updateFun(now);
     for (const c of [...this.chars.values()]) {
       if (c.mode === 'hidden') continue;
       let poseName: PoseName = 'stand';
       let seatHeight = 0.47;
+      let progress = 0;
+      const hit = c.hit && now < c.hit.until ? c.hit : undefined;
+      if (c.hit && !hit) {
+        c.hit = undefined;
+        this.recover(c);
+      }
 
-      if (c.mode === 'riding') {
+      if (hit) {
+        // Knocked about by the boss: slide back (never through furniture), then recover.
+        progress = (now - hit.at) / (hit.until - hit.at);
+        if (!hit.seated) {
+          const k = Math.exp(-(now - hit.at) / (hit.kind === 'slap' ? 110 : 230));
+          const nx = c.x + hit.vx * k * dt;
+          const nz = c.z + hit.vz * k * dt;
+          if (this.nav.free(navIndex(nx, c.z))) c.x = nx;
+          if (this.nav.free(navIndex(c.x, nz))) c.z = nz;
+        }
+        seatHeight = c.act?.seat?.height ?? 0.47;
+        poseName = hit.kind === 'kick' ? 'kicked' : hit.seated ? 'sitSlapped' : 'slapped';
+      } else if (c.mode === 'riding') {
         c.y = this.elevator.y + 0.02;
         poseName = this.elevator.y < -20 ? 'handsBehind' : 'stand';
         c.heading = 0;
@@ -746,10 +982,30 @@ export class Sim {
         if (!c.path.length) this.arrive(c, now);
       } else if (c.mode === 'player') {
         // Moved by the player controller.
-        c.y = FLOOR_Y;
+        c.y = FLOOR_Y + (c.jumpY ?? 0);
+        const lunge = c.lunge;
+        if (lunge) {
+          const k = Math.min(1, (now - lunge.at) / lunge.dur);
+          const e = k * k * (3 - 2 * k);
+          c.x = lunge.fx + (lunge.tx - lunge.fx) * e;
+          c.z = lunge.fz + (lunge.tz - lunge.fz) * e;
+          if (k >= 1) c.lunge = undefined;
+        }
         const speed = c.playerSpeed ?? 0;
-        poseName = speed > 0.25 ? 'walk' : 'stand';
-        c.walkPhase += dt * speed * 4.1;
+        if (c.sitting) {
+          const seat = c.sitting.seat;
+          poseName = !seat ? 'floorSit' : seat.kind === 'beanbag' || seat.kind === 'sofa' ? 'lounge' : 'sit';
+          seatHeight = seat?.height ?? 0;
+        } else {
+          poseName = (c.jumpY ?? 0) > 0.03 ? 'jump' : speed > 3.6 ? 'run' : speed > 0.25 ? 'walk' : 'stand';
+          // Longer strides when running: the legs cycle a little slower per metre.
+          c.walkPhase += dt * speed * (speed > 3.6 ? 2.6 : 4.1);
+        }
+        const action = c.bossAction;
+        if (action && now - action.at < action.dur) {
+          poseName = action.kind === 'slap' ? 'bossSlap' : 'bossKick';
+          progress = (now - action.at) / action.dur;
+        }
       } else if (c.mode === 'queue') {
         c.y = FLOOR_Y;
         turnToward(c, Math.PI, dt * 6);
@@ -772,7 +1028,15 @@ export class Sim {
 
       c.person.root.position.set(c.x, c.y, c.z);
       c.person.root.rotation.y = c.heading;
-      c.person.blend(pose(poseName, t + c.phase, seatHeight, c.walkPhase), dt, poseName === 'walk' ? 14 : 8);
+      // Short actions follow their own curves closely; everything else eases between poses.
+      const action = hit !== undefined || poseName === 'bossSlap' || poseName === 'bossKick';
+      const quick = poseName === 'walk' || poseName === 'run' || poseName === 'jump';
+      c.person.blend(pose(poseName, t + c.phase, seatHeight, c.walkPhase, progress), dt, action ? 42 : quick ? 16 : 8);
+      // Face: blinking, a moving mouth while talking, and a head that turns toward whoever he talks to.
+      c.person.animateFace(dt, t + c.phase * 3, (c.talkUntil ?? 0) > now ? 1 : 0);
+      // While reeling from a hit, the head does what the hit does.
+      const look = hit ? { yaw: 0, pitch: 0 } : this.lookTarget(c, now);
+      c.person.look(look.yaw, look.pitch, dt);
       this.bubbles(c, now);
     }
   }
@@ -880,6 +1144,7 @@ export class Sim {
   /** Shows a bubble. Repeats of a question the user already saw stay out of the chat feed. */
   private say(c: Char, text: string, kind: Bubble['kind'], ms?: number, feed = true) {
     c.bubble = { text, kind, until: performance.now() + (ms ?? Math.min(8000, 3000 + text.length * 50)) };
+    if (kind !== 'action' && kind !== 'think') c.talkUntil = this.clock() + Math.min(5200, 500 + text.length * 52);
     if (feed) this.onChatter?.(c, kind, text);
     c.nextBubbleAt = this.clock() + 6000;
   }

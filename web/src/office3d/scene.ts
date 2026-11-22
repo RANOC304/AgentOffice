@@ -6,6 +6,8 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { PROVIDER_META } from '../../../shared/rooms.ts';
 import type { AgentSnapshot, NeoPage } from '../../../shared/types.ts';
+import { audio } from '../audio/engine.ts';
+import { OfficeSound } from '../audio/officeSound.ts';
 import { FreeFly, Tour } from './cameraModes.ts';
 import { Elevator } from './elevator.ts';
 import { buildEnvironment, type Environment, ISLAND_TOP } from './environment.ts';
@@ -27,6 +29,8 @@ export interface BossState {
   arrived: boolean;
   /** The mouse is captured for looking around. */
   locked: boolean;
+  /** Sitting on a seat or on the floor. */
+  sitting: 'seat' | 'floor' | null;
 }
 
 /** Idle tour starts by itself after this long without any input. */
@@ -94,6 +98,7 @@ export class OfficeScene {
   private freeFly: FreeFly;
   private tour: Tour;
   private player: PlayerControl;
+  private sound: OfficeSound;
   private autoIdle = true;
   private lastInput = performance.now();
   private ticker: Worker | null = null;
@@ -228,8 +233,12 @@ export class OfficeScene {
     this.applyTimeOfDay(Date.now());
 
     this.buildColliders();
-    this.sim.onChatter = (c, kind, text) =>
+    this.sound = new OfficeSound(this.sim, this.elevator, this.camera);
+    this.sim.onSound = (name, x, y, z, from) => this.sound.fx(name, x, y, z, from);
+    this.sim.onChatter = (c, kind, text) => {
+      this.sound.chatter(c, kind, text, this.sim.selectedId);
       this.callbacks.onChatter({ agentId: c.id, persona: c.agent.persona, provider: c.agent.provider, kind, text, at: this.sim.clock() });
+    };
     this.freeFly = new FreeFly(this.camera);
     this.sim.onBossArrived = (c) => {
       this.player.yaw = c.heading;
@@ -245,20 +254,26 @@ export class OfficeScene {
     el.addEventListener('pointerdown', (e) => {
       down = { x: e.clientX, y: e.clientY };
       last = { x: e.clientX, y: e.clientY };
-      if (this.mode === 'free') el.setPointerCapture(e.pointerId);
-      if (this.mode === 'boss' && document.pointerLockElement !== el) {
-        // Capture the mouse so it turns your head like in a game (Esc gives it back).
-        try {
-          void (el.requestPointerLock() as unknown as Promise<void> | undefined)?.catch?.(() => undefined);
-        } catch {
-          el.setPointerCapture(e.pointerId);
-        }
+      if ((this.mode === 'boss' || this.mode === 'free') && e.button === 2) {
+        // Right click, and only right click, hides or shows the cursor: hidden, the mouse turns
+        // your head like in a game.
+        e.preventDefault();
+        down = null;
+        last = null;
+        if (document.pointerLockElement === el) document.exitPointerLock();
+        else
+          try {
+            void (el.requestPointerLock() as unknown as Promise<void> | undefined)?.catch?.(() => undefined);
+          } catch {
+            // pointer lock not available: dragging still turns the camera
+          }
+        return;
       }
+      if (this.mode === 'free') el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointerup', (e) => {
       if (this.mode === 'boss') {
-        // A click while the mouse is captured talks to the worker in front of you.
-        if (document.pointerLockElement === el && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) this.interact();
+        // Boss actions are on the keyboard only; clicks do nothing here.
         down = null;
         last = null;
         return;
@@ -277,7 +292,11 @@ export class OfficeScene {
         el.style.cursor = document.pointerLockElement === el ? 'none' : 'crosshair';
         return;
       }
-      if (this.mode === 'free' && e.buttons && last) {
+      if (this.mode === 'free' && document.pointerLockElement === el) {
+        this.freeFly.look(e.movementX, e.movementY);
+        return;
+      }
+      if (this.mode === 'free' && e.buttons & 1 && last) {
         this.freeFly.look(e.clientX - last.x, e.clientY - last.y);
         last = { x: e.clientX, y: e.clientY };
         return;
@@ -286,6 +305,9 @@ export class OfficeScene {
       const id = this.pick(e);
       if (this.mode !== 'tour') this.sim.hoverId = id;
       el.style.cursor = id || this.overScreen(e) ? 'pointer' : this.mode === 'free' ? 'crosshair' : 'grab';
+    });
+    el.addEventListener('contextmenu', (e) => {
+      if (this.mode === 'boss' || this.mode === 'free') e.preventDefault();
     });
     el.addEventListener('dblclick', () => {
       if (this.mode === 'orbit') this.setHome(false);
@@ -335,7 +357,15 @@ export class OfficeScene {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (key === 'v' && !e.repeat) this.setBossView(this.player.view === 'fpv' ? 'tpv' : 'fpv');
         else if (key === 'e' && !e.repeat) this.interact();
-        else this.player.keys.add(key);
+        else if (key === 'r' && !e.repeat) this.bossAttack('slap');
+        else if (key === 'f' && !e.repeat) this.bossAttack('kick');
+        else if (key === 'c' && !e.repeat) this.toggleSit();
+        else if (key === 'l' && !e.repeat) this.setMode('orbit');
+        else if (key === 'm' && !e.repeat) audio.update({ enabled: !audio.settings.enabled });
+        else {
+          this.player.keys.add(key);
+          this.player.press(key, e.repeat);
+        }
         if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) e.preventDefault();
         return;
       }
@@ -344,8 +374,10 @@ export class OfficeScene {
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) e.preventDefault();
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      this.freeFly.keys.delete(e.key.toLowerCase());
-      this.player.keys.delete(e.key.toLowerCase());
+      const key = e.key.toLowerCase();
+      this.freeFly.keys.delete(key);
+      this.player.keys.delete(key);
+      this.player.release(key);
     };
     const onBlur = () => {
       this.freeFly.keys.clear();
@@ -430,6 +462,7 @@ export class OfficeScene {
     this.camAnim = null;
     this.controls.enabled = mode === 'orbit';
     if (prev === 'tour') this.sim.hoverId = null;
+    if (prev === 'free' && document.pointerLockElement) document.exitPointerLock();
     if (prev === 'boss') {
       // You walk back to the elevator and ride down; the camera is yours again.
       this.sim.boss?.person.setHeadVisible(true);
@@ -437,6 +470,8 @@ export class OfficeScene {
       if (document.pointerLockElement) document.exitPointerLock();
       this.player.keys.clear();
       this.renderer.domElement.style.cursor = '';
+      this.camera.fov = 34;
+      this.camera.updateProjectionMatrix();
       this.callbacks.onBoss(null);
     }
     if (mode === 'boss') this.player.begin();
@@ -464,6 +499,32 @@ export class OfficeScene {
     this.emitBoss();
   }
 
+  /** Just for fun: slap or kick the worker in front of you. */
+  bossAttack(kind: 'slap' | 'kick') {
+    if (this.mode !== 'boss') return;
+    const wasSitting = Boolean(this.sim.boss?.sitting);
+    this.sim.bossAttack(kind, this.player.yaw);
+    if (wasSitting) this.emitBoss();
+  }
+
+  /** Puts you back in front of the elevator (for when you are lost or stuck). */
+  resetBoss() {
+    if (this.mode !== 'boss' || !this.sim.resetBoss()) return;
+    this.player.stop();
+    this.player.yaw = 0;
+    this.player.pitch = -0.08;
+    this.emitBoss();
+  }
+
+  /** Sit down (nearest seat, or the floor) or stand up again. */
+  toggleSit() {
+    const c = this.sim.boss;
+    if (!c || c.mode !== 'player') return;
+    if (c.sitting) this.sim.bossStand();
+    else this.sim.bossSit();
+    this.emitBoss();
+  }
+
   setBossView(view: BossView) {
     this.player.setView(view);
     this.emitBoss();
@@ -475,6 +536,7 @@ export class OfficeScene {
       view: this.player.view,
       arrived: this.sim.boss?.mode === 'player',
       locked: document.pointerLockElement === this.renderer.domElement,
+      sitting: this.sim.boss?.sitting ? (this.sim.boss.sitting.floor ? 'floor' : 'seat') : null,
     });
   }
 
@@ -552,6 +614,7 @@ export class OfficeScene {
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
     this.ticker?.terminate();
+    this.sound.dispose();
     for (const fn of this.cleanup) fn();
     this.resizeObserver.disconnect();
     this.controls.dispose();
@@ -901,10 +964,14 @@ export class OfficeScene {
       const c = this.sim.boss;
       if (!c) this.setMode('orbit');
       else {
-        const wasArrived = c.mode === 'player';
-        this.player.update(dt, c, c.mode === 'player', c.mode === 'hidden' ? this.elevator.y + 0.02 : c.y);
+        // Any movement key gets you back on your feet.
+        if (c.sitting && (this.player.moving || this.player.keys.has(' '))) {
+          this.sim.bossStand();
+          this.emitBoss();
+        }
+        this.player.update(dt, c, c.mode === 'player' && !c.sitting, c.mode === 'hidden' ? this.elevator.y + 0.02 : c.y);
         c.person.setHeadVisible(this.player.view !== 'fpv' || c.mode !== 'player');
-        if (!wasArrived && c.mode === 'player') this.emitBoss();
+        if (this.player.landed) this.sound.fx('land', c.x, 0.05, c.z);
       }
     } else if (this.mode === 'free') this.freeFly.update(dt);
     else if (this.mode === 'tour') {
@@ -927,6 +994,8 @@ export class OfficeScene {
       }
     }
     if (this.mode === 'orbit') this.controls.update();
+    this.camera.updateMatrixWorld();
+    this.sound.update(dt, now, { selectedId: this.sim.selectedId, bossMode: this.mode === 'boss', ball: this.ball.visible ? this.ball.position : null });
     this.updateLabels();
     this.renderer.shadowMap.needsUpdate = this.frameCount++ % 2 === 0;
     this.renderer.render(this.scene, this.camera);

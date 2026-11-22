@@ -23,7 +23,16 @@ export type PoseName =
   | 'pingpong'
   | 'arcade'
   | 'brew'
-  | 'watch';
+  | 'watch'
+  | 'run'
+  | 'floorSit'
+  | 'bossSlap'
+  | 'bossKick'
+  | 'slapped'
+  | 'kicked'
+  | 'sitSlapped'
+  | 'sitKicked'
+  | 'jump';
 
 const sitBase = (seat: number): Partial<Joints> => ({
   hipsY: seat + 0.07,
@@ -33,10 +42,108 @@ const sitBase = (seat: number): Partial<Joints> => ({
   kneeR: 1.48,
 });
 
-/** t is seconds; phase offsets keep characters out of sync. */
-export function pose(name: PoseName, t: number, seat = 0.47, walkPhase = 0): Joints {
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+/** Smoothstep: eases in and out. */
+const ease = (x: number) => {
+  const c = clamp01(x);
+  return c * c * (3 - 2 * c);
+};
+
+/** Upper body of someone just slapped: the head snaps to his right, a hand goes to the cheek. */
+function slappedUpper(p: number): Partial<Joints> {
+  const snap = clamp01(p / 0.05) * (1 - ease((p - 0.3) / 0.55));
+  const cheek = ease((p - 0.12) / 0.2) * (1 - ease((p - 0.7) / 0.28));
+  return {
+    headRy: -1.2 * snap,
+    headRx: -0.16 * snap,
+    torsoRy: -0.32 * snap,
+    armLx: -1.35 * cheek,
+    armLz: 0.07 + 0.3 * cheek,
+    elbowL: -0.12 - 2.15 * cheek,
+    armRz: -0.07 - 0.35 * snap,
+  };
+}
+
+/** t is seconds; phase offsets keep characters out of sync; p is the progress of a short action (0–1). */
+export function pose(name: PoseName, t: number, seat = 0.47, walkPhase = 0, p = 0): Joints {
   const s = Math.sin;
+  const bell = s(Math.min(1, Math.max(0, p)) * Math.PI);
   switch (name) {
+    case 'bossSlap': {
+      // Raise the right hand to face height, pull it back to the right, then sweep it across the
+      // front (the hit lands mid-sweep), follow through and come back.
+      const wind = ease(p / 0.28);
+      const strike = ease((p - 0.28) / 0.2);
+      const k = 1 - ease((p - 0.58) / 0.42);
+      return {
+        ...STAND,
+        torsoRy: (-0.5 * wind + 1.05 * strike) * k,
+        torsoRx: 0.06 * k,
+        armRx: -1.68 * wind * k,
+        armRy: (-1.2 * wind + 2.05 * strike) * k,
+        armRz: -0.07,
+        elbowR: -0.12 + (-0.85 * wind + 0.8 * strike) * k,
+        armLx: -0.4 * k,
+        elbowL: -0.12 - 0.7 * k,
+        headRy: 0.18 * strike * k,
+        thighL: -0.22 * wind * k,
+        kneeL: 0.18 * wind * k,
+      };
+    }
+    case 'bossKick':
+      return {
+        ...STAND,
+        hipsY: 0.9,
+        torsoRx: -0.28 * bell,
+        thighR: -1.55 * bell,
+        kneeR: 0.95 * (1 - bell) * (p < 0.5 ? 1 : 0.3) + 0.08,
+        thighL: 0.12 * bell,
+        kneeL: 0.15 * bell,
+        armLx: -0.7 * bell,
+        armLz: 0.55 * bell,
+        armRx: 0.55 * bell,
+        armRz: -0.5 * bell,
+        elbowL: -0.5,
+        elbowR: -0.5,
+      };
+    case 'slapped': {
+      // A small step back while the head snaps away.
+      const step = clamp01(p / 0.08) * (1 - ease((p - 0.25) / 0.4));
+      return { ...STAND, ...slappedUpper(p), thighR: 0.25 * step, kneeR: 0.2 * step, torsoRx: -0.08 * step };
+    }
+    case 'kicked': {
+      // Knocked off his feet: falls on his back, lies there dazed, then gets back up.
+      const fall = ease(p / 0.15);
+      const rise = clamp01((p - 0.62) / 0.34);
+      const down = fall * (1 - ease(rise));
+      const crouch = s(rise * Math.PI);
+      const air = s(clamp01(p / 0.15) * Math.PI);
+      const daze = down * (1 - air);
+      return {
+        ...STAND,
+        hipsY: 0.925 - 0.785 * down - 0.18 * crouch,
+        hipsRx: -1.5 * down,
+        torsoRx: -0.3 * air + 0.75 * crouch,
+        headRx: 0.32 * daze + 0.2 * air,
+        headRy: s(t * 1.4) * 0.35 * daze,
+        thighL: -0.7 * air - 1.25 * crouch - 0.12 * daze + s(t * 3.1) * 0.06 * daze,
+        thighR: -0.45 * air - 1.0 * crouch - 0.05 * daze,
+        kneeL: 0.6 * air + 1.8 * crouch + 0.3 * daze,
+        kneeR: 0.4 * air + 1.6 * crouch + 0.15 * daze,
+        armLz: 0.07 + 1.2 * down + s(t * 21) * 0.35 * air,
+        armRz: -0.07 - 1.2 * down - s(t * 21) * 0.35 * air,
+        armLx: -0.9 * air - 0.55 * crouch - 0.15 * daze,
+        armRx: -0.9 * air - 0.55 * crouch - 0.15 * daze,
+        elbowL: -0.3,
+        elbowR: -0.3,
+      };
+    }
+    case 'sitSlapped':
+      return { ...STAND, ...sitBase(seat), ...slappedUpper(p), armRx: -0.3, elbowR: -0.6 };
+    case 'jump':
+      return { ...STAND, torsoRx: 0.08, thighL: -0.75, kneeL: 1.25, thighR: -0.35, kneeR: 0.8, armLx: -0.5, armRx: -0.5, armLz: 0.55, armRz: -0.55, elbowL: -0.5, elbowR: -0.5, headRx: -0.08 };
+    case 'sitKicked':
+      return { ...STAND, ...sitBase(seat), torsoRx: -0.45 * bell, headRx: 0.3 * bell, armLz: 0.9 * bell, armRz: -0.9 * bell, armLx: -0.6 * bell, armRx: -0.6 * bell, elbowL: -0.5, elbowR: -0.5 };
     case 'walk': {
       const p = walkPhase;
       const sw = s(p);
@@ -55,6 +162,45 @@ export function pose(name: PoseName, t: number, seat = 0.47, walkPhase = 0): Joi
         headRx: 0.04,
       };
     }
+    case 'run': {
+      const p = walkPhase;
+      const sw = s(p);
+      return {
+        ...STAND,
+        hipsY: 0.9 + Math.abs(s(p)) * 0.055,
+        torsoRx: 0.2,
+        headRx: -0.12,
+        thighL: sw * 0.95 - 0.15,
+        thighR: -sw * 0.95 - 0.15,
+        kneeL: 0.25 + Math.max(0, s(p + 1.2)) * 1.45,
+        kneeR: 0.25 + Math.max(0, s(p + 1.2 + Math.PI)) * 1.45,
+        armLx: -sw * 0.95,
+        armRx: sw * 0.95,
+        armLz: 0.12,
+        armRz: -0.12,
+        elbowL: -1.45,
+        elbowR: -1.45,
+      };
+    }
+    case 'floorSit':
+      // On the floor, legs stretched out, leaning back on the hands.
+      return {
+        ...STAND,
+        hipsY: 0.13,
+        torsoRx: -0.28,
+        headRx: 0.12 + s(t * 0.4) * 0.04,
+        headRy: s(t * 0.3) * 0.2,
+        thighL: -1.42,
+        thighR: -1.32,
+        kneeL: 0.18,
+        kneeR: 0.38,
+        armLx: 0.75,
+        armRx: 0.75,
+        armLz: 0.28,
+        armRz: -0.28,
+        elbowL: -0.1,
+        elbowR: -0.1,
+      };
     case 'sit':
       return { ...STAND, ...sitBase(seat), torsoRx: -0.06, elbowL: -0.5, elbowR: -0.5, armLx: -0.25, armRx: -0.25 };
     case 'type': {

@@ -29,7 +29,8 @@ interface Settings {
 
 export function readSettings(): Settings {
   try {
-    return JSON.parse(fs.readFileSync(SETTINGS, 'utf8')) as Settings;
+    // Tolerate a byte-order mark: Windows editors and PowerShell add one, and it would make the file unreadable.
+    return JSON.parse(fs.readFileSync(SETTINGS, 'utf8').replace(/^﻿/, '')) as Settings;
   } catch {
     return {};
   }
@@ -49,6 +50,8 @@ export function peerFileName(host: string): string {
 export class Peers {
   private cache = new Map<string, { mtime: number; data: PeerFile | null }>();
   list: PeerStatus[] = [];
+  /** Why the shared folder cannot be used right now; the dashboard shows it. */
+  problem?: string;
 
   get dir(): string | undefined {
     return process.env.AGENTOFFICE_PEERS_DIR || readSettings().peersDir || undefined;
@@ -81,11 +84,13 @@ export class Peers {
     const dir = this.dir;
     const out = { agents: [] as AgentSnapshot[], neoPages: [] as NeoPage[] };
     this.list = [];
+    this.problem = undefined;
     if (!dir) return out;
     let names: string[] = [];
     try {
       names = fs.readdirSync(dir).filter((n) => n.endsWith('.agentoffice.json'));
     } catch {
+      this.problem = 'The shared folder cannot be read. Check that it exists and that your sync tool is running.';
       return out;
     }
     const self = peerFileName(os.hostname());

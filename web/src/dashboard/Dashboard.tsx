@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { OfficeSnapshot } from '../../../shared/types.ts';
 import type { Connection } from '../useOffice.ts';
-import { compact } from '../format.ts';
+import { ago, compact } from '../format.ts';
 import { AgentDetail } from './AgentDetail.tsx';
 import { AgentList } from './AgentList.tsx';
 import { Analytics } from './Analytics.tsx';
@@ -38,6 +38,9 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNe
   };
   const limit = worstGauge(snapshot?.usage);
   const agents = snapshot?.agents ?? [];
+  // A computer that stopped sharing (its sync tool or peer is down) must not fail silently.
+  const offlinePeers = snapshot?.peers.list.filter((p) => !p.online) ?? [];
+  const peerWarning = snapshot?.peers.problem ?? (offlinePeers.length ? `Offline: ${offlinePeers.map((p) => `${p.host} (updated ${ago(p.updatedAt)})`).join(', ')}. Check that the sync tool and the peer run on that computer and on this one.` : null);
   const selected = agents.find((a) => a.id === selectedId) ?? null;
 
   const kpis = useMemo(() => {
@@ -87,6 +90,12 @@ export function Dashboard({ snapshot, connection, selectedId, onSelect, onOpenNe
           </button>
         )}
       </header>
+
+      {connection === 'live' && peerWarning && (
+        <button type="button" className="peer-warn" onClick={() => setTab('settings')} title="Open Settings → Other computers">
+          ⚠ {peerWarning}
+        </button>
+      )}
 
       <section className="kpis" aria-label="Office summary">
         {kpis.map((k) =>

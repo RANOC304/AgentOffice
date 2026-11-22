@@ -185,7 +185,7 @@ export class Office {
       windowMs: config.windowMs,
       missions: this.missions?.list ?? [],
       usage: this.usage(agents, now),
-      peers: { dir: this.peers?.dir, list: this.peers?.list ?? [] },
+      peers: { dir: this.peers?.dir, list: this.peers?.list ?? [], problem: this.peers?.problem },
       pins: [...this.state.pins.values()],
       launchers: { 'claude-code': Boolean(toolsIfKnown()?.['claude-code']), codex: Boolean(toolsIfKnown()?.codex) },
     };

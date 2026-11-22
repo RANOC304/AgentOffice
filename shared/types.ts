@@ -275,7 +275,7 @@ export interface OfficeSnapshot {
   missions: Mission[];
   usage: UsageInfo;
   /** Remote computers feeding this office. */
-  peers: { dir?: string; list: PeerStatus[] };
+  peers: { dir?: string; list: PeerStatus[]; problem?: string };
   /** Projects pinned to a room by the user. */
   pins: Array<{ path: string; room: RoomId }>;
   /** Which command-line tools AgentOffice found for missions. */

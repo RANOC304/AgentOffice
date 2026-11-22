@@ -2227,6 +2227,23 @@ button.small {
   box-shadow: inset 0 0 0 1px rgba(255, 138, 107, 0.6);
 }
 
+.peer-warn {
+  display: block;
+  width: calc(100% - 36px);
+  margin: 0 18px 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  background: rgba(255, 207, 74, 0.14);
+  color: var(--waiting);
+  box-shadow: inset 0 0 0 1px rgba(255, 207, 74, 0.45);
+}
+
 /* Forms */
 
 .mission-form,
@@ -2812,4 +2829,136 @@ button.small {
 .ao-label.boss .ao-tag {
   background: #1e2638;
   box-shadow: 0 0 0 2px #c0392b, 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+/* ---------------------------------------------------------------- sound panel */
+
+.sound-wrap {
+  position: relative;
+}
+
+.sound-panel {
+  position: absolute;
+  left: 0;
+  bottom: 40px;
+  width: 260px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(22, 18, 30, 0.94);
+  color: #fff;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  z-index: 6;
+  font-family: var(--body);
+  font-size: 13px;
+}
+
+.sound-row {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.sound-row input[type="range"] {
+  accent-color: #ffd38a;
+  width: 100%;
+}
+
+.sound-row select {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.sound-row select option {
+  color: #1d1826;
+}
+
+.sound-note {
+  margin: 0;
+  font-size: 11px;
+  color: #bdb3d3;
+  line-height: 1.35;
+}
+
+/* ---------------------------------------------------------------- dashboard floats over the office */
+
+/* The 3D office always fills the window; the dashboard is an overlay on its right, so opening or
+   closing it never resizes the view. */
+.app,
+.app.panel-closed {
+  display: block;
+  position: relative;
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+}
+
+.dash {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100vw);
+  z-index: 8;
+  background: radial-gradient(120% 60% at 100% 0%, rgba(180, 164, 234, 0.12), transparent 60%), rgba(31, 26, 43, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: -10px 0 30px rgba(10, 6, 20, 0.35);
+  animation: dash-in 0.18s ease-out;
+}
+
+@keyframes dash-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+/* With the dashboard open, the button that hides it sits just left of it. */
+.app:not(.panel-closed) .panel-toggle {
+  right: calc(min(440px, 100vw) + 14px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash {
+    animation: none;
+  }
+}
+
+/* The overlay keeps its own width on small windows, so keep its desktop grid. */
+.dash .kpis {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.dash .stats {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+@media (max-width: 980px) {
+  .dash {
+    border-top: 0;
+  }
+}
+
+/* Keep the office's own controls and messages in the part of the view the dashboard leaves free. */
+.app:not(.panel-closed) .office-controls {
+  max-width: calc(100% - min(440px, 100vw) - 28px);
+}
+
+.app:not(.panel-closed) .toasts,
+.app:not(.panel-closed) .replay-bar,
+.app:not(.panel-closed) .freecam-hud {
+  left: calc((100% - min(440px, 100vw)) / 2);
+}
+
+.app:not(.panel-closed) .replay-bar {
+  width: min(720px, calc(100% - min(440px, 100vw) - 28px));
 }

@@ -182,6 +182,11 @@ export class Elevator {
     if (!this.departures.includes(id)) this.departures.push(id);
   }
 
+  /** How far the doors are open (0 closed, 1 open), for the door sound. */
+  get doorAmount(): number {
+    return this.doors;
+  }
+
   /** Empties the cabin and the queues at once (the office is being rebuilt, e.g. for a replay). */
   reset() {
     this.arrivals = [];
@@ -194,6 +199,13 @@ export class Elevator {
     this.doorTarget = 0;
     this.doors = 0;
     this.status = 'idle';
+  }
+
+  /** Takes someone out of the cabin's current trip too (he is being replaced). */
+  evict(id: string) {
+    this.cancel(id);
+    const i = this.job?.ids.indexOf(id) ?? -1;
+    if (this.job && i >= 0) this.job.ids.splice(i, 1);
   }
 
   cancel(id: string) {

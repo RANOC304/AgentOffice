@@ -16,6 +16,8 @@ AgentOffice is a private, local-only web app that shows the owner's AI agents an
 
 ## Custom instructions
 
+- BrowserOS neo profile: `Aubin-Automation`.
+
 ### Critical rules
 
 - Collectors only read local files. Sessions are created, continued or stopped only by explicit user actions in the dashboard (missions, replies, stop, hand-off), as the owner requested; never automatically. Missions default to read-only permissions, and full access needs a confirmation.
@@ -31,7 +33,7 @@ AgentOffice is a private, local-only web app that shows the owner's AI agents an
 - `npm start` – build the UI and serve everything at http://127.0.0.1:4317.
 - `npm run check` – TypeScript type-check (must pass before committing).
 - `npm run snapshot` – print what the collectors currently see.
-- `npm run peer -- --dir "<synced folder>"` – peer mode for another computer: writes its agents into the shared folder. On Linux, `npm run peer:install -- --dir "<synced folder>"` runs it as a systemd user service at login (`peer:status`, `peer:uninstall`; `scripts/peer-service.mjs`).
+- `npm run peer -- --dir "<synced folder>"` – peer mode for another computer: writes its agents into the shared folder. On Linux, `npm run peer:setup -- --dir "<synced folder>" --main-id <Syncthing ID>` installs the peer and Syncthing as always-on systemd user services (`peer:status`, `peer:uninstall`; `scripts/peer-service.mjs`, launcher `scripts/peer-run.sh`).
 - Add `?demo` to the URL for synthetic agents.
 
 ### Architecture
@@ -48,6 +50,7 @@ AgentOffice is a private, local-only web app that shows the owner's AI agents an
 - `server/classify.ts` – maps files, commands, MCP servers and skills to rooms.
 - `shared/` – types, room definitions and the validated provider palette used by both sides.
 - `web/src/office3d/` – three.js office: `layout.ts` (floor plan, seats, spots, nav grid), `environment.ts` (island, garden, walls), `furniture.ts` (merged procedural furniture), `person.ts` + `poses.ts` (jointed male characters), `sim.ts` (behaviours, conversations, hand-offs, say-once speech), `talk.ts` (conversation topics and small talk), `elevator.ts`, `screens.ts` (Neo wall screen, desk monitors), `scene.ts` (renderer, lighting, labels, cursor zoom, frame loop with worker fallback and catch-up, adaptive resolution), `cameraModes.ts` (free camera, idle tour), `player.ts` (boss mode: FPV/TPV walking controller), `ticker.ts` (background worker clock), `ChatFeed.tsx`, `ReplayBar.tsx`.
+- `web/src/audio/` – `engine.ts` (Web Audio context, buses, settings, positional panners), `music.ts` (generative lo-fi), `voice.ts` (local text-to-speech and babble voices; never use online voices), `officeSound.ts` (elevator, steps, typing, coffee, ping-pong, ambience, hits, character voices).
 - `web/src/dashboard/` – React side panel (agents with controls, missions, projects, usage + analytics, standup, feed, settings with alerts, other computers and names). `web/src/alerts.ts` (notifications and chime), `web/src/replay.ts` (rebuilds the office at a past moment).
 
 ## Assigned skills

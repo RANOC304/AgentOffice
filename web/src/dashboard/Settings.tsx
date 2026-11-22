@@ -68,7 +68,11 @@ export function Settings({ snapshot, agents, demo }: { snapshot: OfficeSnapshot 
           project and run:
         </p>
         <pre className="cmd">npm install{'\n'}npm run peer -- --dir "&lt;that same synced folder on the other computer&gt;"</pre>
-        <p className="muted small">It writes a small redacted summary of its sessions (no transcripts) into the folder every few seconds. Nothing goes over the network from this app.</p>
+        <p className="muted small">
+          It writes a small redacted summary of its sessions (no transcripts) into the folder every few seconds. Nothing goes over the network from this app. On Linux, use{' '}
+          <code>npm run peer:setup -- --dir "&lt;folder&gt;" --main-id &lt;Syncthing ID&gt;</code> instead to keep everything running at every boot. The sync tool (for example Syncthing) must also run on this computer, or the other
+          computer shows as offline here.
+        </p>
         <form
           className="peers-form"
           onSubmit={(e) => {

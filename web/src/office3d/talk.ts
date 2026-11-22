@@ -582,6 +582,58 @@ export function workThought(a: AgentSnapshot, said: Set<string>): string | null 
   return pick(fresh);
 }
 
+// ------------------------------------------------------------------ slapstick
+
+const SLAPPED = [
+  'Ow! What was that for, boss?!',
+  'Hey! I am literally working!',
+  'Okay, okay, I will go faster!',
+  'Was that about the failing tests?',
+  'Is this a new kind of code review?',
+  'I will take that as feedback.',
+  'Noted, boss. Ouch.',
+  'My cheek just got rate-limited!',
+  'Did I push to main again?',
+  'That was not in the sprint plan!',
+  'Ow! I was about to commit!',
+  'Fine, I will write the tests first next time.',
+];
+const KICKED = [
+  'Aaah! Not the back!',
+  'I am flying! 🚀',
+  'Was it my commit message?!',
+  'I will fix the bug, I promise!',
+  'That is one way to deploy me.',
+  'Ouch! That was a hard reset!',
+  'I felt that in my context window.',
+  'Rolling back… slowly…',
+  'Uncaught exception: boss shoe.',
+  'Whoa! Okay, standup is over!',
+];
+const SEAT_KICKED = ['My chair! I almost spilled my coffee!', 'Hey! I nearly hit the keyboard with my face!', 'Not the chair, boss, it is ergonomic!', 'I am staying seated, I am staying seated!'];
+const BYSTANDER = [
+  'Whoa, boss!',
+  'Heads up, the boss is in a mood!',
+  'Remind me to never push on a Friday.',
+  'Run, code review is back!',
+  '😬',
+  'I saw nothing. Nothing!',
+  'Is that in the employee handbook?',
+  'Okay, I am going back to work right now.',
+];
+
+/** What a worker says after the boss slaps or kicks him (just for fun). */
+export function reactionLine(kind: 'slap' | 'kick', seated: boolean, said: Set<string>): string {
+  const options = kind === 'slap' ? SLAPPED : seated ? SEAT_KICKED : KICKED;
+  const fresh = options.filter((x) => !said.has(x));
+  return pick(fresh.length ? fresh : options);
+}
+
+export function bystanderLine(said: Set<string>): string {
+  const fresh = BYSTANDER.filter((x) => !said.has(x));
+  return pick(fresh.length ? fresh : BYSTANDER);
+}
+
 // ------------------------------------------------------------------ talking to the boss
 
 function hello(now: number): string {
