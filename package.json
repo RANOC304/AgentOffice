@@ -2,6 +2,7 @@
   "name": "agentoffice",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Private, local-only 3D office that shows your Claude, Codex and ChatGPT agent sessions, with missions you can launch from it.",
   "type": "module",
   "engines": {

@@ -4,10 +4,12 @@ A private, local-only 3D office floating in the sky, where every current **Claud
 
 It **reads** local files to draw the office. It only starts, continues or stops a session when you ask it to (missions, replies, stop), and it never leaves your computer.
 
-## Run it
+## Run locally
+
+Install Node.js 22.18 or later. From the repository root, install the pinned dependencies and start AgentOffice.
 
 ```bash
-npm install
+npm ci
 npm start
 ```
 
@@ -103,10 +105,10 @@ The office records compact frames and short, redacted events for the replay and 
 
 To see the agents of another computer (even on another network), share a folder between both computers with any sync tool (OneDrive, Google Drive, Dropbox, Syncthing, a network share):
 
-1. On the other computer, get this project and run `npm install`, then:
+1. On the other computer, get this project and run `npm ci`. Set the folder path to the directory your sync tool shares.
 
    ```bash
-   npm run peer -- --dir "C:\Users\you\OneDrive\AgentOffice"
+   npm run peer -- --dir "path/to/AgentOffice-sync"
    ```
 
    It reads that computer's sessions with the same collectors and writes a small redacted summary (no transcripts, no screenshots) into the folder every 10 seconds.
@@ -157,3 +159,7 @@ Regular ChatGPT and Claude chats are stored in the cloud, not on your computer, 
 - No outbound network requests. Fonts and the 3D engine are bundled, and there is no telemetry.
 - Only short snippets reach the browser, never full transcripts, and common secrets (API keys, tokens, passwords, private keys) are masked. Neo screenshots are served only from Neo's own screenshot folder.
 - Git status uses `git --no-optional-locks status`, so it never takes repository locks.
+
+## Contributing and license
+
+See the [contributor guide](CONTRIBUTING.md) for bug reports and pull requests. AgentOffice's original code is available under the [MIT License](LICENSE). See the [third-party notices](THIRD_PARTY_NOTICES.md) for dependencies and bundled fonts.
